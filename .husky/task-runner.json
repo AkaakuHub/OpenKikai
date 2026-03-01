@@ -16,6 +16,14 @@
         "build",
         "LLMeta.sln"
       ]
+    },
+    {
+      "name": "restage",
+      "command": "git",
+      "args": [
+        "add",
+        "-u"
+      ]
     }
   ],
   "groups": [
@@ -23,7 +31,8 @@
       "name": "pre-commit",
       "tasks": [
         "format",
-        "lint"
+        "lint",
+        "restage"
       ]
     }
   ]
