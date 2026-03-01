@@ -6,20 +6,14 @@ using LLMeta.App.Utils;
 using LLMeta.App.ViewModels;
 using Velopack;
 using DispatcherTimer = System.Windows.Threading.DispatcherTimer;
-using WinForms = System.Windows.Forms;
 
 namespace LLMeta.App;
 
 public partial class App : System.Windows.Application
 {
-    private WinForms.NotifyIcon? _notifyIcon;
-    private MainWindow? _mainWindow;
-    private MainViewModel? _mainViewModel;
     private OpenXrControllerInputService? _openXrControllerInputService;
     private DispatcherTimer? _openXrPollTimer;
     private string? _lastOpenXrStatus;
-    private bool _isExitRequested;
-    private AppLogger? _logger;
 
     [STAThread]
     public static void Main()
@@ -37,7 +31,6 @@ public partial class App : System.Windows.Application
         AppPaths.EnsureDirectories();
 
         var logger = new AppLogger();
-        _logger = logger;
         logger.Info("Startup begin.");
 
         try
@@ -65,13 +58,7 @@ public partial class App : System.Windows.Application
 
             var settingsStore = new SettingsStore(logger);
             var settings = settingsStore.Load();
-            var startupRegistryService = new StartupRegistryService();
-            var mainViewModel = new MainViewModel(
-                settings,
-                settingsStore,
-                startupRegistryService,
-                logger
-            );
+            var mainViewModel = new MainViewModel(settings, settingsStore, logger);
             var openXrControllerInputService = new OpenXrControllerInputService();
             var initializeState = openXrControllerInputService.Initialize();
             mainViewModel.UpdateOpenXrControllerState(initializeState);
@@ -90,10 +77,10 @@ public partial class App : System.Windows.Application
 
                     var state = _openXrControllerInputService.Poll();
                     mainViewModel.UpdateOpenXrControllerState(state);
-                    if (_logger is not null && _lastOpenXrStatus != state.Status)
+                    if (_lastOpenXrStatus != state.Status)
                     {
                         _lastOpenXrStatus = state.Status;
-                        _logger.Info($"OpenXR input state: {state.Status}");
+                        logger.Info($"OpenXR input state: {state.Status}");
                     }
                 };
                 _openXrPollTimer.Start();
@@ -103,33 +90,8 @@ public partial class App : System.Windows.Application
                 openXrControllerInputService.Dispose();
             }
 
-            _mainViewModel = mainViewModel;
-
-            if (settings.StartWithWindows)
-            {
-                var exePath = startupRegistryService.ResolveExecutablePath();
-                startupRegistryService.Enable(exePath);
-            }
-            else
-            {
-                startupRegistryService.Disable();
-            }
-
-            _mainWindow = new MainWindow { DataContext = mainViewModel };
-            MainWindow = _mainWindow;
-            _mainWindow.Closing += OnMainWindowClosing;
-
-            if (settings.StartMinimized)
-            {
-                _mainWindow.WindowState = WindowState.Minimized;
-                _mainWindow.Hide();
-            }
-            else
-            {
-                _mainWindow.Show();
-            }
-
-            InitializeTrayIcon();
+            MainWindow = new MainWindow { DataContext = mainViewModel };
+            MainWindow.Show();
 
             logger.Info("Startup completed.");
         }
@@ -147,81 +109,6 @@ public partial class App : System.Windows.Application
         _openXrPollTimer = null;
         _openXrControllerInputService?.Dispose();
         _openXrControllerInputService = null;
-        _notifyIcon?.Dispose();
         base.OnExit(e);
-    }
-
-    private void OnMainWindowClosing(object? sender, System.ComponentModel.CancelEventArgs e)
-    {
-        if (_isExitRequested)
-        {
-            return;
-        }
-
-        e.Cancel = true;
-        _mainWindow?.Hide();
-    }
-
-    private void InitializeTrayIcon()
-    {
-        if (_mainViewModel is null)
-        {
-            return;
-        }
-
-        var menu = new WinForms.ContextMenuStrip();
-
-        var openItem = new WinForms.ToolStripMenuItem("Open");
-        openItem.Click += (_, _) => ShowMainWindow(forceShow: true);
-
-        var exitItem = new WinForms.ToolStripMenuItem("Exit");
-        exitItem.Click += (_, _) => ExitApp();
-
-        menu.Items.Add(openItem);
-        menu.Items.Add(new WinForms.ToolStripSeparator());
-        menu.Items.Add(exitItem);
-
-        var exePath = new StartupRegistryService().ResolveExecutablePath();
-        var appIcon = System.Drawing.Icon.ExtractAssociatedIcon(exePath);
-
-        _notifyIcon = new WinForms.NotifyIcon
-        {
-            Icon = appIcon ?? System.Drawing.SystemIcons.Application,
-            Visible = true,
-            Text = "LLMeta",
-        };
-        _notifyIcon.ContextMenuStrip = menu;
-        _notifyIcon.MouseClick += (_, args) =>
-        {
-            if (args.Button == WinForms.MouseButtons.Left)
-            {
-                ShowMainWindow(forceShow: true);
-            }
-        };
-
-        _mainViewModel.ExitRequested += (_, _) => ExitApp();
-    }
-
-    private void ShowMainWindow(bool forceShow)
-    {
-        if (_mainWindow is null)
-        {
-            return;
-        }
-
-        if (forceShow)
-        {
-            _mainWindow.WindowState = WindowState.Normal;
-        }
-        _mainWindow.Show();
-        _mainWindow.Activate();
-    }
-
-    private void ExitApp()
-    {
-        _isExitRequested = true;
-        _notifyIcon?.Dispose();
-        _mainWindow?.Close();
-        Shutdown();
     }
 }

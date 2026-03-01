@@ -33,13 +33,7 @@
       />
 
       <TextBlock Text="Settings:" FontWeight="SemiBold" Margin="0,16,0,8" />
-
-      <CheckBox
-        Content="Start with Windows"
-        IsChecked="{Binding StartWithWindows}"
-        Margin="0,0,0,4"
-      />
-      <CheckBox Content="Start minimized" IsChecked="{Binding StartMinimized}" Margin="0,0,0,4" />
+      <TextBlock Text="OpenXR input monitor mode" Foreground="Gray" Margin="0,0,0,4" />
 
       <TextBlock Text="OpenXR Controller Input:" FontWeight="SemiBold" Margin="0,16,0,8" />
       <Border BorderBrush="#DDDDDD" BorderThickness="1" Padding="8">
