@@ -1,0 +1,30 @@
+{
+  "tasks": [
+    {
+      "name": "format",
+      "command": "dotnet",
+      "args": [
+        "csharpier",
+        "format",
+        "."
+      ]
+    },
+    {
+      "name": "lint",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "LLMeta.sln"
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "name": "pre-commit",
+      "tasks": [
+        "format",
+        "lint"
+      ]
+    }
+  ]
+}
