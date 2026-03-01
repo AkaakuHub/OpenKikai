@@ -5,6 +5,7 @@ using LLMeta.App.Stores;
 using LLMeta.App.Utils;
 using LLMeta.App.ViewModels;
 using Velopack;
+using DispatcherTimer = System.Windows.Threading.DispatcherTimer;
 using WinForms = System.Windows.Forms;
 
 namespace LLMeta.App;
@@ -14,6 +15,9 @@ public partial class App : System.Windows.Application
     private WinForms.NotifyIcon? _notifyIcon;
     private MainWindow? _mainWindow;
     private MainViewModel? _mainViewModel;
+    private OpenXrControllerInputService? _openXrControllerInputService;
+    private DispatcherTimer? _openXrPollTimer;
+    private string? _lastOpenXrStatus;
     private bool _isExitRequested;
     private AppLogger? _logger;
 
@@ -62,42 +66,42 @@ public partial class App : System.Windows.Application
             var settingsStore = new SettingsStore(logger);
             var settings = settingsStore.Load();
             var startupRegistryService = new StartupRegistryService();
-            var openXrInputService = new OpenXrInputService();
-            var openXrProbeResult = openXrInputService.ProbeHeadMountedDisplaySession();
-            logger.Info(
-                $"OpenXR enumerate extensions result: {openXrProbeResult.EnumerateExtensionsResult}"
-            );
-            logger.Info(
-                $"OpenXR supports XR_KHR_D3D11_enable: {openXrProbeResult.SupportsKhrD3D11Enable}"
-            );
-            logger.Info(
-                $"OpenXR supports XR_KHR_D3D12_enable: {openXrProbeResult.SupportsKhrD3D12Enable}"
-            );
-            logger.Info(
-                $"OpenXR supports XR_MND_headless: {openXrProbeResult.SupportsMndHeadless}"
-            );
-            logger.Info($"OpenXR instance create result: {openXrProbeResult.InstanceCreateResult}");
-            logger.Info(
-                $"OpenXR get system result: {openXrProbeResult.GetSystemResult}, systemId: {openXrProbeResult.SystemId}"
-            );
-            logger.Info(
-                $"OpenXR get D3D11 graphics requirements result: {openXrProbeResult.GetD3D11GraphicsRequirementsResult}"
-            );
-            logger.Info(
-                $"OpenXR D3D11 create device HRESULT: 0x{openXrProbeResult.D3D11CreateDeviceHResult:X8}"
-            );
-            logger.Info($"OpenXR create session result: {openXrProbeResult.CreateSessionResult}");
-            if (!string.IsNullOrWhiteSpace(openXrProbeResult.Diagnostics))
-            {
-                logger.Info($"OpenXR diagnostics: {openXrProbeResult.Diagnostics}");
-            }
-
             var mainViewModel = new MainViewModel(
                 settings,
                 settingsStore,
                 startupRegistryService,
                 logger
             );
+            var openXrControllerInputService = new OpenXrControllerInputService();
+            var initializeState = openXrControllerInputService.Initialize();
+            mainViewModel.UpdateOpenXrControllerState(initializeState);
+            logger.Info($"OpenXR input initialize: {initializeState.Status}");
+
+            if (initializeState.IsInitialized)
+            {
+                _openXrControllerInputService = openXrControllerInputService;
+                _openXrPollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
+                _openXrPollTimer.Tick += (_, _) =>
+                {
+                    if (_openXrControllerInputService is null)
+                    {
+                        return;
+                    }
+
+                    var state = _openXrControllerInputService.Poll();
+                    mainViewModel.UpdateOpenXrControllerState(state);
+                    if (_logger is not null && _lastOpenXrStatus != state.Status)
+                    {
+                        _lastOpenXrStatus = state.Status;
+                        _logger.Info($"OpenXR input state: {state.Status}");
+                    }
+                };
+                _openXrPollTimer.Start();
+            }
+            else
+            {
+                openXrControllerInputService.Dispose();
+            }
 
             _mainViewModel = mainViewModel;
 
@@ -139,6 +143,10 @@ public partial class App : System.Windows.Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _openXrPollTimer?.Stop();
+        _openXrPollTimer = null;
+        _openXrControllerInputService?.Dispose();
+        _openXrControllerInputService = null;
         _notifyIcon?.Dispose();
         base.OnExit(e);
     }

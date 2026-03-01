@@ -17,6 +17,9 @@ public sealed class MainViewModel : ViewModelBase
 
     private string _statusMessage = "Ready";
     private string _sampleText = string.Empty;
+    private string _openXrInputStatus = "OpenXR input: not initialized";
+    private string _leftControllerState = "Left: -";
+    private string _rightControllerState = "Right: -";
 
     public MainViewModel(
         AppSettings settings,
@@ -46,6 +49,24 @@ public sealed class MainViewModel : ViewModelBase
     {
         get => _sampleText;
         set => SetProperty(ref _sampleText, value);
+    }
+
+    public string OpenXrInputStatus
+    {
+        get => _openXrInputStatus;
+        set => SetProperty(ref _openXrInputStatus, value);
+    }
+
+    public string LeftControllerState
+    {
+        get => _leftControllerState;
+        set => SetProperty(ref _leftControllerState, value);
+    }
+
+    public string RightControllerState
+    {
+        get => _rightControllerState;
+        set => SetProperty(ref _rightControllerState, value);
     }
 
     public bool StartWithWindows
@@ -81,6 +102,15 @@ public sealed class MainViewModel : ViewModelBase
 
     public event EventHandler? ExitRequested;
 
+    public void UpdateOpenXrControllerState(OpenXrControllerState state)
+    {
+        OpenXrInputStatus = $"OpenXR: {state.Status}";
+        LeftControllerState =
+            $"Left Stick ({state.LeftStickX:0.00}, {state.LeftStickY:0.00}) | X:{ToOnOff(state.LeftXPressed)} Y:{ToOnOff(state.LeftYPressed)}";
+        RightControllerState =
+            $"Right Stick ({state.RightStickX:0.00}, {state.RightStickY:0.00}) | A:{ToOnOff(state.RightAPressed)} B:{ToOnOff(state.RightBPressed)}";
+    }
+
     private void SaveSettings()
     {
         _settings.SampleText = SampleText;
@@ -107,5 +137,10 @@ public sealed class MainViewModel : ViewModelBase
         {
             _logger.Error("Failed to update startup registry.", ex);
         }
+    }
+
+    private static string ToOnOff(bool value)
+    {
+        return value ? "ON" : "OFF";
     }
 }
