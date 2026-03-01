@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Silk.NET.OpenXR;
 using XrAction = Silk.NET.OpenXR.Action;
 
@@ -107,73 +108,200 @@ public sealed unsafe partial class OpenXrControllerInputService
             return createRightBResult;
         }
 
-        var bindings = new ActionSuggestedBinding[6];
-        var pathResult = StringToPath(
-            _instance,
-            "/user/hand/left/input/thumbstick",
-            out var leftStickPath
+        var createLeftTriggerResult = CreateAction(
+            _actionSet,
+            "left_trigger",
+            "Left Trigger",
+            ActionType.FloatInput,
+            ref _leftTriggerAction
         );
-        if (pathResult != Result.Success)
+        if (createLeftTriggerResult != Result.Success)
         {
-            return pathResult;
+            return createLeftTriggerResult;
         }
-        bindings[0] = new ActionSuggestedBinding
-        {
-            Action = _leftStickAction,
-            Binding = leftStickPath,
-        };
 
-        pathResult = StringToPath(
-            _instance,
-            "/user/hand/right/input/thumbstick",
-            out var rightStickPath
+        var createLeftGripResult = CreateAction(
+            _actionSet,
+            "left_grip",
+            "Left Grip",
+            ActionType.FloatInput,
+            ref _leftGripAction
         );
-        if (pathResult != Result.Success)
+        if (createLeftGripResult != Result.Success)
         {
-            return pathResult;
+            return createLeftGripResult;
         }
-        bindings[1] = new ActionSuggestedBinding
-        {
-            Action = _rightStickAction,
-            Binding = rightStickPath,
-        };
 
-        pathResult = StringToPath(_instance, "/user/hand/left/input/x/click", out var leftXPath);
-        if (pathResult != Result.Success)
-        {
-            return pathResult;
-        }
-        bindings[2] = new ActionSuggestedBinding { Action = _leftXAction, Binding = leftXPath };
-
-        pathResult = StringToPath(_instance, "/user/hand/left/input/y/click", out var leftYPath);
-        if (pathResult != Result.Success)
-        {
-            return pathResult;
-        }
-        bindings[3] = new ActionSuggestedBinding { Action = _leftYAction, Binding = leftYPath };
-
-        pathResult = StringToPath(_instance, "/user/hand/right/input/a/click", out var rightAPath);
-        if (pathResult != Result.Success)
-        {
-            return pathResult;
-        }
-        bindings[4] = new ActionSuggestedBinding { Action = _rightAAction, Binding = rightAPath };
-
-        pathResult = StringToPath(_instance, "/user/hand/right/input/b/click", out var rightBPath);
-        if (pathResult != Result.Success)
-        {
-            return pathResult;
-        }
-        bindings[5] = new ActionSuggestedBinding { Action = _rightBAction, Binding = rightBPath };
-
-        var suggestionResult = SuggestBindingForProfile(
-            _instance,
-            "/interaction_profiles/oculus/touch_controller",
-            bindings
+        var createRightTriggerResult = CreateAction(
+            _actionSet,
+            "right_trigger",
+            "Right Trigger",
+            ActionType.FloatInput,
+            ref _rightTriggerAction
         );
-        if (suggestionResult != Result.Success)
+        if (createRightTriggerResult != Result.Success)
         {
-            return suggestionResult;
+            return createRightTriggerResult;
+        }
+
+        var createRightGripResult = CreateAction(
+            _actionSet,
+            "right_grip",
+            "Right Grip",
+            ActionType.FloatInput,
+            ref _rightGripAction
+        );
+        if (createRightGripResult != Result.Success)
+        {
+            return createRightGripResult;
+        }
+
+        var createLeftStickClickResult = CreateAction(
+            _actionSet,
+            "left_stick_click",
+            "Left Stick Click",
+            ActionType.BooleanInput,
+            ref _leftStickClickAction
+        );
+        if (createLeftStickClickResult != Result.Success)
+        {
+            return createLeftStickClickResult;
+        }
+
+        var createRightStickClickResult = CreateAction(
+            _actionSet,
+            "right_stick_click",
+            "Right Stick Click",
+            ActionType.BooleanInput,
+            ref _rightStickClickAction
+        );
+        if (createRightStickClickResult != Result.Success)
+        {
+            return createRightStickClickResult;
+        }
+
+        var bindings = new List<ActionSuggestedBinding>(16);
+
+        var addResult = AddRequiredBinding(
+            bindings,
+            _leftStickAction,
+            "/user/hand/left/input/thumbstick"
+        );
+        if (addResult != Result.Success)
+        {
+            return addResult;
+        }
+
+        addResult = AddRequiredBinding(
+            bindings,
+            _rightStickAction,
+            "/user/hand/right/input/thumbstick"
+        );
+        if (addResult != Result.Success)
+        {
+            return addResult;
+        }
+
+        addResult = AddRequiredBinding(bindings, _leftXAction, "/user/hand/left/input/x/click");
+        if (addResult != Result.Success)
+        {
+            return addResult;
+        }
+
+        addResult = AddRequiredBinding(bindings, _leftYAction, "/user/hand/left/input/y/click");
+        if (addResult != Result.Success)
+        {
+            return addResult;
+        }
+
+        addResult = AddRequiredBinding(bindings, _rightAAction, "/user/hand/right/input/a/click");
+        if (addResult != Result.Success)
+        {
+            return addResult;
+        }
+
+        addResult = AddRequiredBinding(bindings, _rightBAction, "/user/hand/right/input/b/click");
+        if (addResult != Result.Success)
+        {
+            return addResult;
+        }
+
+        addResult = AddRequiredBinding(
+            bindings,
+            _leftTriggerAction,
+            "/user/hand/left/input/trigger/value"
+        );
+        if (addResult != Result.Success)
+        {
+            return addResult;
+        }
+
+        addResult = AddRequiredBinding(
+            bindings,
+            _leftGripAction,
+            "/user/hand/left/input/squeeze/value"
+        );
+        if (addResult != Result.Success)
+        {
+            return addResult;
+        }
+
+        addResult = AddRequiredBinding(
+            bindings,
+            _rightTriggerAction,
+            "/user/hand/right/input/trigger/value"
+        );
+        if (addResult != Result.Success)
+        {
+            return addResult;
+        }
+
+        addResult = AddRequiredBinding(
+            bindings,
+            _rightGripAction,
+            "/user/hand/right/input/squeeze/value"
+        );
+        if (addResult != Result.Success)
+        {
+            return addResult;
+        }
+
+        const string interactionProfilePath = "/interaction_profiles/oculus/touch_controller";
+        var requiredSuggestionResult = SuggestBindingForProfile(
+            _instance,
+            interactionProfilePath,
+            bindings.ToArray()
+        );
+        if (requiredSuggestionResult != Result.Success)
+        {
+            return requiredSuggestionResult;
+        }
+
+        var optionalSupported = new List<string>(2);
+        var optionalUnsupported = new List<string>(2);
+        TryAddOptionalBindingWithSuggest(
+            bindings,
+            _leftStickClickAction,
+            "/user/hand/left/input/thumbstick/click",
+            interactionProfilePath,
+            optionalSupported,
+            optionalUnsupported
+        );
+        TryAddOptionalBindingWithSuggest(
+            bindings,
+            _rightStickClickAction,
+            "/user/hand/right/input/thumbstick/click",
+            interactionProfilePath,
+            optionalSupported,
+            optionalUnsupported
+        );
+
+        _bindingSupportSummary =
+            $"optionalSupported={optionalSupported.Count}, optionalUnsupported={optionalUnsupported.Count}";
+        if (optionalUnsupported.Count > 0)
+        {
+            _bindingSupportSummary =
+                $"{_bindingSupportSummary} | unsupported: {string.Join(", ", optionalUnsupported)}";
         }
 
         var attachInfo = new SessionActionSetsAttachInfo
@@ -184,6 +312,56 @@ public sealed unsafe partial class OpenXrControllerInputService
         var actionSet = _actionSet;
         attachInfo.ActionSets = &actionSet;
         return _xr.AttachSessionActionSets(_session, ref attachInfo);
+    }
+
+    private Result AddRequiredBinding(
+        List<ActionSuggestedBinding> bindings,
+        XrAction action,
+        string pathString
+    )
+    {
+        var pathResult = StringToPath(_instance, pathString, out var path);
+        if (pathResult != Result.Success)
+        {
+            return pathResult;
+        }
+
+        bindings.Add(new ActionSuggestedBinding { Action = action, Binding = path });
+        return Result.Success;
+    }
+
+    private void TryAddOptionalBindingWithSuggest(
+        List<ActionSuggestedBinding> bindings,
+        XrAction action,
+        string pathString,
+        string interactionProfilePath,
+        List<string> optionalSupported,
+        List<string> optionalUnsupported
+    )
+    {
+        var pathResult = StringToPath(_instance, pathString, out var path);
+        if (pathResult != Result.Success)
+        {
+            optionalUnsupported.Add(pathString);
+            return;
+        }
+
+        var candidate = new ActionSuggestedBinding { Action = action, Binding = path };
+        bindings.Add(candidate);
+
+        var validationResult = SuggestBindingForProfile(
+            _instance,
+            interactionProfilePath,
+            bindings.ToArray()
+        );
+        if (validationResult == Result.Success)
+        {
+            optionalSupported.Add(pathString);
+            return;
+        }
+
+        bindings.RemoveAt(bindings.Count - 1);
+        optionalUnsupported.Add($"{pathString}({validationResult})");
     }
 
     private Result SyncActions()

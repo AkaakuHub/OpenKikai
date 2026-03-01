@@ -146,4 +146,27 @@ public sealed unsafe partial class OpenXrControllerInputService
 
         return state.CurrentState;
     }
+
+    private float GetFloatActionState(XrAction action)
+    {
+        if (_xr is null)
+        {
+            return 0;
+        }
+
+        var getInfo = new ActionStateGetInfo
+        {
+            Type = StructureType.ActionStateGetInfo,
+            Action = action,
+            SubactionPath = XR.NullPath,
+        };
+        var state = new ActionStateFloat { Type = StructureType.ActionStateFloat };
+        var result = _xr.GetActionStateFloat(_session, ref getInfo, ref state);
+        if (result != Result.Success || state.IsActive == 0)
+        {
+            return 0;
+        }
+
+        return state.CurrentState;
+    }
 }

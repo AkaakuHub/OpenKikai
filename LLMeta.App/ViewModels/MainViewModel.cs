@@ -106,9 +106,9 @@ public sealed class MainViewModel : ViewModelBase
     {
         OpenXrInputStatus = $"OpenXR: {state.Status}";
         LeftControllerState =
-            $"Left Stick ({state.LeftStickX:0.00}, {state.LeftStickY:0.00}) | X:{ToOnOff(state.LeftXPressed)} Y:{ToOnOff(state.LeftYPressed)}";
+            $"Left Stick ({state.LeftStickX:0.00}, {state.LeftStickY:0.00}) Click:{ToOnOff(state.LeftStickClickPressed)} | X:{ToOnOff(state.LeftXPressed)} Y:{ToOnOff(state.LeftYPressed)} | Trigger:{state.LeftTriggerValue:0.00} | Grip:{state.LeftGripValue:0.00}";
         RightControllerState =
-            $"Right Stick ({state.RightStickX:0.00}, {state.RightStickY:0.00}) | A:{ToOnOff(state.RightAPressed)} B:{ToOnOff(state.RightBPressed)}";
+            $"Right Stick ({state.RightStickX:0.00}, {state.RightStickY:0.00}) Click:{ToOnOff(state.RightStickClickPressed)} | A:{ToOnOff(state.RightAPressed)} B:{ToOnOff(state.RightBPressed)} | Trigger:{state.RightTriggerValue:0.00} | Grip:{state.RightGripValue:0.00}";
     }
 
     private void SaveSettings()

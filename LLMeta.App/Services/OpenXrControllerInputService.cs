@@ -19,11 +19,18 @@ public sealed unsafe partial class OpenXrControllerInputService : IDisposable
     private XrAction _leftYAction;
     private XrAction _rightAAction;
     private XrAction _rightBAction;
+    private XrAction _leftTriggerAction;
+    private XrAction _leftGripAction;
+    private XrAction _rightTriggerAction;
+    private XrAction _rightGripAction;
+    private XrAction _leftStickClickAction;
+    private XrAction _rightStickClickAction;
     private ID3D11Device* _d3d11Device;
     private ID3D11DeviceContext* _d3d11DeviceContext;
     private SessionState _sessionState = SessionState.Unknown;
     private bool _isSessionRunning;
     private bool _isInitialized;
+    private string _bindingSupportSummary = string.Empty;
 
     public OpenXrControllerState Initialize()
     {
@@ -116,6 +123,11 @@ public sealed unsafe partial class OpenXrControllerInputService : IDisposable
             }
 
             _isInitialized = true;
+            if (_bindingSupportSummary.Length > 0)
+            {
+                return CreateState($"Initialized | {_bindingSupportSummary}");
+            }
+
             return CreateState("Initialized");
         }
         catch (Exception ex)
@@ -179,6 +191,12 @@ public sealed unsafe partial class OpenXrControllerInputService : IDisposable
         var leftY = GetBooleanActionState(_leftYAction);
         var rightA = GetBooleanActionState(_rightAAction);
         var rightB = GetBooleanActionState(_rightBAction);
+        var leftTrigger = GetFloatActionState(_leftTriggerAction);
+        var leftGrip = GetFloatActionState(_leftGripAction);
+        var rightTrigger = GetFloatActionState(_rightTriggerAction);
+        var rightGrip = GetFloatActionState(_rightGripAction);
+        var leftStickClick = GetBooleanActionState(_leftStickClickAction);
+        var rightStickClick = GetBooleanActionState(_rightStickClickAction);
 
         return new OpenXrControllerState(
             true,
@@ -187,6 +205,12 @@ public sealed unsafe partial class OpenXrControllerInputService : IDisposable
             leftStick.Y,
             rightStick.X,
             rightStick.Y,
+            leftTrigger,
+            leftGrip,
+            rightTrigger,
+            rightGrip,
+            leftStickClick,
+            rightStickClick,
             leftX,
             leftY,
             rightA,
@@ -235,6 +259,42 @@ public sealed unsafe partial class OpenXrControllerInputService : IDisposable
         {
             _xr.DestroyAction(_rightBAction);
             _rightBAction = default;
+        }
+
+        if (_leftTriggerAction.Handle != 0)
+        {
+            _xr.DestroyAction(_leftTriggerAction);
+            _leftTriggerAction = default;
+        }
+
+        if (_leftGripAction.Handle != 0)
+        {
+            _xr.DestroyAction(_leftGripAction);
+            _leftGripAction = default;
+        }
+
+        if (_rightTriggerAction.Handle != 0)
+        {
+            _xr.DestroyAction(_rightTriggerAction);
+            _rightTriggerAction = default;
+        }
+
+        if (_rightGripAction.Handle != 0)
+        {
+            _xr.DestroyAction(_rightGripAction);
+            _rightGripAction = default;
+        }
+
+        if (_leftStickClickAction.Handle != 0)
+        {
+            _xr.DestroyAction(_leftStickClickAction);
+            _leftStickClickAction = default;
+        }
+
+        if (_rightStickClickAction.Handle != 0)
+        {
+            _xr.DestroyAction(_rightStickClickAction);
+            _rightStickClickAction = default;
         }
 
         if (_actionSet.Handle != 0)
@@ -286,6 +346,12 @@ public sealed unsafe partial class OpenXrControllerInputService : IDisposable
             0,
             0,
             0,
+            0,
+            0,
+            0,
+            0,
+            false,
+            false,
             false,
             false,
             false,
