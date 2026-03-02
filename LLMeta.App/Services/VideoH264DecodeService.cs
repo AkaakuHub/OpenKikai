@@ -27,8 +27,6 @@ public sealed class VideoH264DecodeService : IDisposable
     private DecodedVideoFrame? _latestFrame;
     private readonly object _frameLock = new();
     private bool _loggedFirstDecodedFrame;
-    private bool _decoderInitializationFailed;
-    private string? _decoderInitializationFailureReason;
 
     public VideoH264DecodeService(AppLogger logger)
     {
@@ -55,11 +53,6 @@ public sealed class VideoH264DecodeService : IDisposable
     {
         try
         {
-            if (_decoderInitializationFailed)
-            {
-                return _decoderInitializationFailureReason ?? "decoder initialization failed";
-            }
-
             EnsureStarted();
             if (_decoder is null)
             {
@@ -102,9 +95,8 @@ public sealed class VideoH264DecodeService : IDisposable
         }
         catch (Exception ex)
         {
-            _decoderInitializationFailed = true;
-            _decoderInitializationFailureReason = "decode failed: " + ex.Message;
             _logger.Error("Video decode failed.", ex);
+            ResetDecoderAfterFailure();
             return "decode failed: " + ex.Message;
         }
     }
@@ -208,46 +200,60 @@ public sealed class VideoH264DecodeService : IDisposable
                 return true;
             }
 
-            using var contiguous = outputBuffer.Sample.ConvertToContiguousBuffer();
-            contiguous.Lock(out var pData, out _, out var currentLength);
-            try
+            var contiguous = outputBuffer.Sample.ConvertToContiguousBuffer();
+            if (contiguous is null)
             {
-                var bytes = new byte[currentLength];
-                Marshal.Copy(pData, bytes, 0, currentLength);
-                var bgra = _outputPixelFormat switch
-                {
-                    DecoderOutputPixelFormat.Bgra32 => bytes,
-                    DecoderOutputPixelFormat.Nv12 => ConvertNv12ToBgra(
-                        bytes,
-                        _outputWidth,
-                        _outputHeight
-                    ),
-                    _ => throw new InvalidOperationException("Unsupported output pixel format."),
-                };
-                var frame = new DecodedVideoFrame(
-                    packet.Sequence,
-                    packet.TimestampUnixMs,
-                    _outputWidth,
-                    _outputHeight,
-                    bgra
-                );
-                lock (_frameLock)
-                {
-                    _latestFrame = frame;
-                }
-                if (!_loggedFirstDecodedFrame)
-                {
-                    _loggedFirstDecodedFrame = true;
-                    _logger.Info(
-                        "Video decoder first frame produced: "
-                            + $"seq={packet.Sequence} width={_outputWidth} height={_outputHeight}"
-                    );
-                }
-                producedFrame = true;
+                return true;
             }
-            finally
+
+            using (contiguous)
             {
-                contiguous.Unlock();
+                contiguous.Lock(out var pData, out _, out var currentLength);
+                try
+                {
+                    var bytes = new byte[currentLength];
+                    Marshal.Copy(pData, bytes, 0, currentLength);
+                    var bgra = _outputPixelFormat switch
+                    {
+                        DecoderOutputPixelFormat.Bgra32 => ConvertRgb32ToBgra(
+                            bytes,
+                            _outputWidth,
+                            _outputHeight
+                        ),
+                        DecoderOutputPixelFormat.Nv12 => ConvertNv12ToBgra(
+                            bytes,
+                            _outputWidth,
+                            _outputHeight
+                        ),
+                        _ => throw new InvalidOperationException(
+                            "Unsupported output pixel format."
+                        ),
+                    };
+                    var frame = new DecodedVideoFrame(
+                        packet.Sequence,
+                        packet.TimestampUnixMs,
+                        _outputWidth,
+                        _outputHeight,
+                        bgra
+                    );
+                    lock (_frameLock)
+                    {
+                        _latestFrame = frame;
+                    }
+                    if (!_loggedFirstDecodedFrame)
+                    {
+                        _loggedFirstDecodedFrame = true;
+                        _logger.Info(
+                            "Video decoder first frame produced: "
+                                + $"seq={packet.Sequence} width={_outputWidth} height={_outputHeight}"
+                        );
+                    }
+                    producedFrame = true;
+                }
+                finally
+                {
+                    contiguous.Unlock();
+                }
             }
         }
     }
@@ -259,6 +265,7 @@ public sealed class VideoH264DecodeService : IDisposable
             return false;
         }
 
+        var firstNv12Index = -1;
         for (var index = 0; ; index++)
         {
             IMFMediaType? mediaType = null;
@@ -268,33 +275,55 @@ public sealed class VideoH264DecodeService : IDisposable
             }
             catch
             {
-                return false;
+                break;
             }
 
             using (mediaType)
             {
                 var subtype = mediaType.GetGUID(MediaTypeAttributeKeys.Subtype);
-                if (subtype != VideoFormatGuids.Rgb32 && subtype != VideoFormatGuids.NV12)
+                if (subtype == VideoFormatGuids.Rgb32)
                 {
-                    continue;
+                    return ApplyOutputType(mediaType, subtype);
                 }
 
-                _decoder.SetOutputType(0, mediaType, (int)SetTypeFlags.None);
-                var frameSize = mediaType.GetUInt64(MediaTypeAttributeKeys.FrameSize);
-                _outputWidth = (int)(frameSize >> 32);
-                _outputHeight = (int)(frameSize & 0xFFFFFFFF);
-                _outputPixelFormat =
-                    subtype == VideoFormatGuids.Rgb32
-                        ? DecoderOutputPixelFormat.Bgra32
-                        : DecoderOutputPixelFormat.Nv12;
-                _outputTypeSet = _outputWidth > 0 && _outputHeight > 0;
-                _logger.Info(
-                    "Video decoder output format ready: "
-                        + $"width={_outputWidth} height={_outputHeight} subtype={subtype}"
-                );
-                return _outputTypeSet;
+                if (subtype == VideoFormatGuids.NV12 && firstNv12Index < 0)
+                {
+                    firstNv12Index = index;
+                }
             }
         }
+
+        if (firstNv12Index < 0)
+        {
+            return false;
+        }
+
+        using var nv12Type = _decoder.GetOutputAvailableType(0, firstNv12Index);
+        var nv12Subtype = nv12Type.GetGUID(MediaTypeAttributeKeys.Subtype);
+        return ApplyOutputType(nv12Type, nv12Subtype);
+    }
+
+    private bool ApplyOutputType(IMFMediaType mediaType, Guid subtype)
+    {
+        if (_decoder is null)
+        {
+            return false;
+        }
+
+        _decoder.SetOutputType(0, mediaType, (int)SetTypeFlags.None);
+        var frameSize = mediaType.GetUInt64(MediaTypeAttributeKeys.FrameSize);
+        _outputWidth = (int)(frameSize >> 32);
+        _outputHeight = (int)(frameSize & 0xFFFFFFFF);
+        _outputPixelFormat =
+            subtype == VideoFormatGuids.Rgb32
+                ? DecoderOutputPixelFormat.Bgra32
+                : DecoderOutputPixelFormat.Nv12;
+        _outputTypeSet = _outputWidth > 0 && _outputHeight > 0;
+        _logger.Info(
+            "Video decoder output format ready: "
+                + $"width={_outputWidth} height={_outputHeight} subtype={subtype}"
+        );
+        return _outputTypeSet;
     }
 
     private IMFTransform? CreateDecoderTransform()
@@ -453,25 +482,87 @@ public sealed class VideoH264DecodeService : IDisposable
         return sample;
     }
 
-    private static byte[] ConvertNv12ToBgra(byte[] nv12, int width, int height)
+    private void ResetDecoderAfterFailure()
     {
-        var yPlaneSize = width * height;
-        var uvPlaneStart = yPlaneSize;
-        var required = yPlaneSize + (yPlaneSize / 2);
-        if (nv12.Length < required)
+        _decoder?.Dispose();
+        _decoder = null;
+        _outputTypeSet = false;
+        _outputWidth = 0;
+        _outputHeight = 0;
+        _outputPixelFormat = DecoderOutputPixelFormat.Unknown;
+        _sampleTime100Ns = 0;
+        _loggedFirstDecodedFrame = false;
+    }
+
+    private static byte[] ConvertRgb32ToBgra(byte[] rgb32, int width, int height)
+    {
+        var requiredLength = checked(width * height * 4);
+        if (rgb32.Length < requiredLength)
         {
             throw new InvalidOperationException(
-                $"NV12 buffer too small. got={nv12.Length} required={required}"
+                $"RGB32 buffer too small. got={rgb32.Length} required={requiredLength}"
+            );
+        }
+
+        if (rgb32.Length == requiredLength)
+        {
+            return rgb32;
+        }
+
+        var sourceStride = rgb32.Length / height;
+        if (sourceStride < width * 4)
+        {
+            throw new InvalidOperationException(
+                $"RGB32 stride too small. stride={sourceStride} width={width}"
+            );
+        }
+
+        var trimmed = new byte[requiredLength];
+        for (var y = 0; y < height; y++)
+        {
+            var sourceOffset = y * sourceStride;
+            var targetOffset = y * width * 4;
+            Buffer.BlockCopy(rgb32, sourceOffset, trimmed, targetOffset, width * 4);
+        }
+
+        return trimmed;
+    }
+
+    private static byte[] ConvertNv12ToBgra(byte[] nv12, int width, int height)
+    {
+        var minimumRequired = checked(width * height * 3 / 2);
+        if (nv12.Length < minimumRequired)
+        {
+            throw new InvalidOperationException(
+                $"NV12 buffer too small. got={nv12.Length} required={minimumRequired}"
+            );
+        }
+
+        var sourceStride = width;
+        var sourceHeight = height;
+        var guessedHeight = (nv12.Length * 2) / (width * 3);
+        if (guessedHeight >= height && (width * guessedHeight * 3) / 2 == nv12.Length)
+        {
+            sourceHeight = guessedHeight;
+        }
+
+        var yPlaneSize = sourceStride * sourceHeight;
+        var uvPlaneStart = yPlaneSize;
+        var uvStride = sourceStride;
+        if (uvPlaneStart + (uvStride * (sourceHeight / 2)) > nv12.Length)
+        {
+            throw new InvalidOperationException(
+                $"NV12 layout invalid. length={nv12.Length} stride={sourceStride} sourceHeight={sourceHeight}"
             );
         }
 
         var bgra = new byte[width * height * 4];
         for (var y = 0; y < height; y++)
         {
-            var uvRow = (y / 2) * width;
+            var uvRow = (y / 2) * uvStride;
             for (var x = 0; x < width; x++)
             {
-                var yValue = nv12[y * width + x];
+                var yValue = nv12[y * sourceStride + x];
                 var uvIndex = uvPlaneStart + uvRow + (x & ~1);
                 var uValue = nv12[uvIndex];
                 var vValue = nv12[uvIndex + 1];

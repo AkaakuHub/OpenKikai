@@ -13,6 +13,7 @@ public partial class App : System.Windows.Application
 {
     private const int AndroidBridgePort = 39090;
     private const int VideoBridgePort = 39100;
+    private const int MaxVideoPacketsPerTick = 8;
 
     private OpenXrControllerInputService? _openXrControllerInputService;
     private AndroidInputBridgeTcpServerService? _androidInputBridgeTcpServerService;
@@ -174,8 +175,15 @@ public partial class App : System.Windows.Application
 
                     if (_videoTcpFrameReceiverService is not null)
                     {
-                        if (_videoTcpFrameReceiverService.TryGetLatestFrame(out var encodedPacket))
+                        var packetsProcessedThisTick = 0;
+                        while (
+                            packetsProcessedThisTick < MaxVideoPacketsPerTick
+                            && _videoTcpFrameReceiverService.TryGetLatestFrame(
+                                out var encodedPacket
+                            )
+                        )
                         {
+                            packetsProcessedThisTick++;
                             _videoFramesObserved++;
                             if (_videoH264DecodeService is not null)
                             {

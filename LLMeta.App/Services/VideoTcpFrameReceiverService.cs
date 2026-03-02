@@ -26,9 +26,10 @@ public sealed class VideoTcpFrameReceiverService : IDisposable
     private Task? _acceptTask;
     private bool _isStarted;
     private int _connectionSequence;
-    private VideoFramePacket? _latestFrame;
-    private VideoFramePacket? _latestSyncFrame;
+    private readonly Queue<VideoFramePacket> _frameQueue = new();
+    private const int MaxFrameQueueLength = 120;
     private VideoStreamStats _stats;
+    private bool _loggedNegativeLatencyOnConnection;
 
     public VideoTcpFrameReceiverService(AppLogger logger, int port)
     {
@@ -58,21 +59,13 @@ public sealed class VideoTcpFrameReceiverService : IDisposable
     {
         lock (_stateLock)
         {
-            if (_latestSyncFrame is not null)
-            {
-                frame = _latestSyncFrame.Value;
-                _latestSyncFrame = null;
-                return true;
-            }
-
-            if (_latestFrame is null)
+            if (_frameQueue.Count == 0)
             {
                 frame = default;
                 return false;
             }
 
-            frame = _latestFrame.Value;
-            _latestFrame = null;
+            frame = _frameQueue.Dequeue();
             return true;
         }
     }
@@ -245,13 +238,23 @@ public sealed class VideoTcpFrameReceiverService : IDisposable
                 hasCodecConfig,
                 payload
             );
-            _latestFrame = packet;
-            if (isKeyFrame && hasCodecConfig)
+            if (_frameQueue.Count >= MaxFrameQueueLength)
             {
-                _latestSyncFrame = packet;
+                _ = _frameQueue.Dequeue();
+                dropped += 1;
             }
+            _frameQueue.Enqueue(packet);
             var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            var latencyMs = nowMs - (long)header.TimestampUnixMs;
+            var rawLatencyMs = nowMs - (long)header.TimestampUnixMs;
+            var latencyMs = rawLatencyMs < 0 ? 0 : rawLatencyMs;
+            if (rawLatencyMs < 0 && !_loggedNegativeLatencyOnConnection)
+            {
+                _loggedNegativeLatencyOnConnection = true;
+                _logger.Info(
+                    "Video timestamp is ahead of receiver clock. "
+                        + $"conn={connectionId} seq={header.Sequence} rawLatencyMs={rawLatencyMs} nowMs={nowMs} packetTs={header.TimestampUnixMs}"
+                );
+            }
             _stats = new VideoStreamStats(
                 _stats.IsConnected,
                 header.Sequence,
@@ -289,9 +292,9 @@ public sealed class VideoTcpFrameReceiverService : IDisposable
     {
         lock (_stateLock)
         {
-            _latestFrame = null;
-            _latestSyncFrame = null;
+            _frameQueue.Clear();
             _stats = _stats with { LastSequence = 0, LastTimestampUnixMs = 0 };
+            _loggedNegativeLatencyOnConnection = false;
         }
         _logger.Info("Video connection begin: conn=" + connectionId);
     }

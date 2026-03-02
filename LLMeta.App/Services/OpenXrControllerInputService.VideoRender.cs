@@ -19,10 +19,14 @@ public sealed unsafe partial class OpenXrControllerInputService
         StereoViewCount
     ];
     private readonly View[] _views = new View[StereoViewCount];
+    private readonly byte[][] _eyeScratchBuffers = new byte[StereoViewCount][];
+    private readonly int[] _eyeScratchWidths = new int[StereoViewCount];
+    private readonly int[] _eyeScratchHeights = new int[StereoViewCount];
 
     private byte[]? _latestSbsBgra;
     private int _latestSbsWidth;
     private int _latestSbsHeight;
+    private int _latestSbsVisibleHeight;
     private uint _latestVideoSequence;
 
     private Result InitializeStereoRendering()
@@ -337,6 +341,7 @@ public sealed unsafe partial class OpenXrControllerInputService
             _latestSbsBgra = frame.BgraPixels;
             _latestSbsWidth = frame.Width;
             _latestSbsHeight = frame.Height;
+            _latestSbsVisibleHeight = ResolveVisibleHeight(frame.Width, frame.Height);
             _latestVideoSequence = frame.Sequence;
         }
     }
@@ -351,27 +356,34 @@ public sealed unsafe partial class OpenXrControllerInputService
         byte[]? latest;
         int sourceWidth;
         int sourceHeight;
+        int sourceVisibleHeight;
         lock (_videoFrameLock)
         {
             latest = _latestSbsBgra;
             sourceWidth = _latestSbsWidth;
             sourceHeight = _latestSbsHeight;
+            sourceVisibleHeight =
+                _latestSbsVisibleHeight > 0 ? _latestSbsVisibleHeight : _latestSbsHeight;
         }
 
         var targetWidth = (int)_viewConfigurationViews[eye].RecommendedImageRectWidth;
         var targetHeight = (int)_viewConfigurationViews[eye].RecommendedImageRectHeight;
-        var eyePixels = new byte[targetWidth * targetHeight * 4];
-        if (latest is not null && sourceWidth > 1 && sourceHeight > 0)
+        var eyePixels = EnsureEyeScratchBuffer(eye, targetWidth, targetHeight);
+        if (latest is not null && sourceWidth > 1 && sourceHeight > 0 && sourceVisibleHeight > 0)
         {
             CopySbsHalfToTarget(
                 latest,
                 sourceWidth,
-                sourceHeight,
+                sourceVisibleHeight,
                 eye,
                 eyePixels,
                 targetWidth,
                 targetHeight
             );
+        }
+        else
+        {
+            Array.Clear(eyePixels, 0, eyePixels.Length);
         }
 
         fixed (byte* sourcePointer = eyePixels)
@@ -390,7 +402,7 @@ public sealed unsafe partial class OpenXrControllerInputService
     private static void CopySbsHalfToTarget(
         byte[] sourceBgra,
         int sourceWidth,
-        int sourceHeight,
+        int sourceVisibleHeight,
         int eye,
         byte[] targetBgra,
         int targetWidth,
@@ -399,6 +411,11 @@ public sealed unsafe partial class OpenXrControllerInputService
     {
         var halfWidth = sourceWidth / 2;
         var srcStartX = eye == 0 ? 0 : halfWidth;
+        var sourceHeight = sourceVisibleHeight;
+        if (halfWidth <= 0 || sourceHeight <= 0)
+        {
+            return;
+        }
 
         for (var y = 0; y < targetHeight; y++)
         {
@@ -414,5 +431,33 @@ public sealed unsafe partial class OpenXrControllerInputService
                 targetBgra[dstIndex + 3] = 255;
             }
         }
+    }
+
+    private byte[] EnsureEyeScratchBuffer(int eye, int width, int height)
+    {
+        var requiredLength = checked(width * height * 4);
+        if (
+            _eyeScratchBuffers[eye] is null
+            || _eyeScratchBuffers[eye].Length != requiredLength
+            || _eyeScratchWidths[eye] != width
+            || _eyeScratchHeights[eye] != height
+        )
+        {
+            _eyeScratchBuffers[eye] = new byte[requiredLength];
+            _eyeScratchWidths[eye] = width;
+            _eyeScratchHeights[eye] = height;
+        }
+
+        return _eyeScratchBuffers[eye];
+    }
+
+    private static int ResolveVisibleHeight(int width, int height)
+    {
+        if (width == 1920 && height == 1088)
+        {
+            return 1080;
+        }
+
+        return height;
     }
 }
