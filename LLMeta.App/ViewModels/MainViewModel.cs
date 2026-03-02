@@ -17,6 +17,7 @@ public sealed class MainViewModel : ViewModelBase
     private string _sampleText = string.Empty;
     private string _openXrInputStatus = "OpenXR input: not initialized";
     private string _bridgeStatus = "Bridge: not started";
+    private string _videoStatus = "Video: not started";
     private bool _isKeyboardDebugMode;
     private string _activeInputSource = "Input source: not selected";
     private string _hmdPoseState = "HMD: -";
@@ -85,6 +86,12 @@ public sealed class MainViewModel : ViewModelBase
     {
         get => _bridgeStatus;
         set => SetProperty(ref _bridgeStatus, value);
+    }
+
+    public string VideoStatus
+    {
+        get => _videoStatus;
+        set => SetProperty(ref _videoStatus, value);
     }
 
     public string ActiveInputSource

@@ -87,15 +87,26 @@ public sealed unsafe partial class OpenXrControllerInputService
             return beginResult;
         }
 
-        var endInfo = new FrameEndInfo
+        if (frameState.ShouldRender == 0)
         {
-            Type = StructureType.FrameEndInfo,
-            DisplayTime = frameState.PredictedDisplayTime,
-            EnvironmentBlendMode = EnvironmentBlendMode.Opaque,
-            LayerCount = 0,
-            Layers = (CompositionLayerBaseHeader**)0,
-        };
-        return _xr.EndFrame(_session, ref endInfo);
+            var endNoRenderInfo = new FrameEndInfo
+            {
+                Type = StructureType.FrameEndInfo,
+                DisplayTime = frameState.PredictedDisplayTime,
+                EnvironmentBlendMode = EnvironmentBlendMode.Opaque,
+                LayerCount = 0,
+                Layers = (CompositionLayerBaseHeader**)0,
+            };
+            return _xr.EndFrame(_session, ref endNoRenderInfo);
+        }
+
+        var renderResult = RenderStereoProjectionLayer(frameState.PredictedDisplayTime, out _);
+        if (renderResult != Result.Success)
+        {
+            return renderResult;
+        }
+
+        return Result.Success;
     }
 
     private Result InitializeHeadTrackingSpaces()

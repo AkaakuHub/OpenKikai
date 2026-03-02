@@ -56,6 +56,7 @@
             <TextBlock Text="{Binding OpenXrInputStatus}" Margin="0,0,0,8" />
             <TextBlock Text="{Binding ActiveInputSource}" Margin="0,0,0,8" />
             <TextBlock Text="{Binding BridgeStatus}" Margin="0,0,0,8" />
+            <TextBlock Text="{Binding VideoStatus}" Margin="0,0,0,8" TextWrapping="Wrap" />
             <TextBlock Text="{Binding HmdPoseState}" TextWrapping="Wrap" Margin="0,0,0,8" />
             <TextBlock Text="{Binding LeftControllerState}" Margin="0,0,0,4" />
             <TextBlock Text="{Binding RightControllerState}" TextWrapping="Wrap" />

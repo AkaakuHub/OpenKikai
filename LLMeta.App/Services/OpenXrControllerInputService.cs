@@ -11,6 +11,7 @@ public sealed unsafe partial class OpenXrControllerInputService : IDisposable
 {
     private XR? _xr;
     private Instance _instance;
+    private ulong _systemId = XR.NullSystemID;
     private Session _session;
     private ActionSet _actionSet;
     private XrAction _leftStickAction;
@@ -85,6 +86,7 @@ public sealed unsafe partial class OpenXrControllerInputService : IDisposable
             {
                 return CreateState($"GetSystem failed: {getSystemResult}");
             }
+            _systemId = systemId;
 
             var getRequirementsResult = GetD3D11GraphicsRequirements(_instance, systemId);
             if (getRequirementsResult != Result.Success)
@@ -131,6 +133,12 @@ public sealed unsafe partial class OpenXrControllerInputService : IDisposable
                 return CreateState(
                     $"InitializeHeadTrackingSpaces failed: {initializeHeadTrackingResult}"
                 );
+            }
+
+            var initializeStereoResult = InitializeStereoRendering();
+            if (initializeStereoResult != Result.Success)
+            {
+                return CreateState($"InitializeStereoRendering failed: {initializeStereoResult}");
             }
 
             _isInitialized = true;
@@ -340,6 +348,8 @@ public sealed unsafe partial class OpenXrControllerInputService : IDisposable
             _session = default;
         }
 
+        DestroyStereoRendering();
+
         if (_instance.Handle != 0)
         {
             _xr.DestroyInstance(_instance);
@@ -360,6 +370,12 @@ public sealed unsafe partial class OpenXrControllerInputService : IDisposable
 
         _isInitialized = false;
         _sessionState = SessionState.Unknown;
+        _systemId = XR.NullSystemID;
+    }
+
+    public void SetLatestDecodedSbsFrame(DecodedVideoFrame frame)
+    {
+        UpdateLatestSbsFrame(frame);
     }
 
     private OpenXrControllerState CreateState(string status)

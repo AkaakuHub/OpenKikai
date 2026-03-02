@@ -12,12 +12,24 @@ namespace LLMeta.App;
 public partial class App : System.Windows.Application
 {
     private const int AndroidBridgePort = 39090;
+    private const int VideoBridgePort = 39100;
 
     private OpenXrControllerInputService? _openXrControllerInputService;
     private AndroidInputBridgeTcpServerService? _androidInputBridgeTcpServerService;
+    private VideoTcpFrameReceiverService? _videoTcpFrameReceiverService;
+    private VideoH264DecodeService? _videoH264DecodeService;
     private readonly KeyboardInputEmulatorService _keyboardInputEmulatorService = new();
     private DispatcherTimer? _openXrPollTimer;
     private string? _lastOpenXrStatus;
+    private uint _videoConnectionId;
+    private bool _videoSyncReady;
+    private DateTimeOffset _lastVideoPipelineLogAt = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastVideoSyncWaitLogAt = DateTimeOffset.MinValue;
+    private uint _videoFramesObserved;
+    private uint _videoFramesDroppedBeforeSync;
+    private uint _videoDecodeCalls;
+    private uint _videoDecodedFrames;
+    private string _lastVideoDecodeStatus = "none";
 
     [STAThread]
     public static void Main()
@@ -86,6 +98,24 @@ public partial class App : System.Windows.Application
             mainViewModel.BridgeStatus =
                 _androidInputBridgeTcpServerService.StatusText + " (A-1: Android -> 10.0.2.2)";
 
+            _videoTcpFrameReceiverService = new VideoTcpFrameReceiverService(
+                logger,
+                VideoBridgePort
+            );
+            _videoTcpFrameReceiverService.Start();
+            _videoH264DecodeService = new VideoH264DecodeService(logger);
+            _videoConnectionId = 0;
+            _videoSyncReady = false;
+            _lastVideoPipelineLogAt = DateTimeOffset.MinValue;
+            _lastVideoSyncWaitLogAt = DateTimeOffset.MinValue;
+            _videoFramesObserved = 0;
+            _videoFramesDroppedBeforeSync = 0;
+            _videoDecodeCalls = 0;
+            _videoDecodedFrames = 0;
+            _lastVideoDecodeStatus = "none";
+            mainViewModel.VideoStatus =
+                _videoTcpFrameReceiverService.StatusText + " (A-1: Android -> 10.0.2.2)";
+
             var initializeState = ReinitializeOpenXr(logger);
             mainViewModel.UpdateOpenXrControllerState(initializeState);
 
@@ -142,6 +172,122 @@ public partial class App : System.Windows.Application
                             + " (A-1: Android -> 10.0.2.2)";
                     }
 
+                    if (_videoTcpFrameReceiverService is not null)
+                    {
+                        if (_videoTcpFrameReceiverService.TryGetLatestFrame(out var encodedPacket))
+                        {
+                            _videoFramesObserved++;
+                            if (_videoH264DecodeService is not null)
+                            {
+                                if (encodedPacket.ConnectionId != _videoConnectionId)
+                                {
+                                    _videoH264DecodeService.Dispose();
+                                    _videoH264DecodeService = new VideoH264DecodeService(logger);
+                                    _videoConnectionId = encodedPacket.ConnectionId;
+                                    _videoSyncReady = false;
+                                    _lastVideoSyncWaitLogAt = DateTimeOffset.MinValue;
+                                    _videoFramesObserved = 1;
+                                    _videoFramesDroppedBeforeSync = 0;
+                                    _videoDecodeCalls = 0;
+                                    _videoDecodedFrames = 0;
+                                    _lastVideoDecodeStatus = "none";
+                                    logger.Info(
+                                        "Video pipeline new connection: "
+                                            + $"conn={_videoConnectionId} seq={encodedPacket.Sequence} flags={encodedPacket.Flags} payload={encodedPacket.Payload.Length}"
+                                    );
+                                }
+
+                                var shouldDecode = true;
+                                if (!_videoSyncReady)
+                                {
+                                    if (encodedPacket.HasCodecConfig && encodedPacket.IsKeyFrame)
+                                    {
+                                        _videoSyncReady = true;
+                                        logger.Info(
+                                            "Video sync AU accepted: "
+                                                + $"conn={_videoConnectionId} seq={encodedPacket.Sequence} flags={encodedPacket.Flags} payload={encodedPacket.Payload.Length}"
+                                        );
+                                    }
+                                    else
+                                    {
+                                        _videoFramesDroppedBeforeSync++;
+                                        var now = DateTimeOffset.UtcNow;
+                                        if (
+                                            _lastVideoSyncWaitLogAt == DateTimeOffset.MinValue
+                                            || (now - _lastVideoSyncWaitLogAt).TotalSeconds >= 1
+                                        )
+                                        {
+                                            _lastVideoSyncWaitLogAt = now;
+                                            logger.Info(
+                                                "Video waiting sync AU: "
+                                                    + $"conn={_videoConnectionId} seq={encodedPacket.Sequence} flags={encodedPacket.Flags} hasCodecConfig={encodedPacket.HasCodecConfig} isKeyFrame={encodedPacket.IsKeyFrame}"
+                                            );
+                                        }
+                                        mainViewModel.VideoStatus =
+                                            _videoTcpFrameReceiverService.StatusText
+                                            + " | decode: waiting sync AU (hasCodecConfig=1 && isKeyFrame=1)"
+                                            + " (A-1: Android -> 10.0.2.2)";
+                                        shouldDecode = false;
+                                    }
+                                }
+
+                                if (shouldDecode)
+                                {
+                                    _videoDecodeCalls++;
+                                    var decodeStatus = _videoH264DecodeService.Decode(
+                                        encodedPacket
+                                    );
+                                    _lastVideoDecodeStatus = decodeStatus;
+                                    if (
+                                        _videoH264DecodeService.TryGetLatestFrame(
+                                            out var decodedFrame
+                                        ) && _openXrControllerInputService is not null
+                                    )
+                                    {
+                                        _videoDecodedFrames++;
+                                        _openXrControllerInputService.SetLatestDecodedSbsFrame(
+                                            decodedFrame
+                                        );
+                                    }
+
+                                    mainViewModel.VideoStatus =
+                                        _videoTcpFrameReceiverService.StatusText
+                                        + " | decode: "
+                                        + decodeStatus
+                                        + " (A-1: Android -> 10.0.2.2)";
+                                }
+                            }
+                        }
+
+                        if (!mainViewModel.VideoStatus.Contains("decode:"))
+                        {
+                            mainViewModel.VideoStatus =
+                                _videoTcpFrameReceiverService.StatusText
+                                + " (A-1: Android -> 10.0.2.2)";
+                        }
+                    }
+
+                    if (_videoTcpFrameReceiverService is not null)
+                    {
+                        var now = DateTimeOffset.UtcNow;
+                        if (
+                            _lastVideoPipelineLogAt == DateTimeOffset.MinValue
+                            || (now - _lastVideoPipelineLogAt).TotalSeconds >= 2
+                        )
+                        {
+                            _lastVideoPipelineLogAt = now;
+                            var stats = _videoTcpFrameReceiverService.GetStatsSnapshot();
+                            logger.Info(
+                                "Video pipeline stats: "
+                                    + $"conn={_videoConnectionId} connected={stats.IsConnected} syncReady={_videoSyncReady} "
+                                    + $"rxFrames={_videoFramesObserved} waitingSyncDrop={_videoFramesDroppedBeforeSync} "
+                                    + $"decodeCalls={_videoDecodeCalls} decodedFrames={_videoDecodedFrames} "
+                                    + $"lastSeq={stats.LastSequence} lastPayload={stats.LastPayloadSize} latencyMs={stats.LastLatencyMs} "
+                                    + $"lastDecodeStatus={_lastVideoDecodeStatus}"
+                            );
+                        }
+                    }
+
                     if (_lastOpenXrStatus != state.Status)
                     {
                         _lastOpenXrStatus = state.Status;
@@ -169,6 +315,12 @@ public partial class App : System.Windows.Application
         _openXrControllerInputService = null;
         _androidInputBridgeTcpServerService?.Dispose();
         _androidInputBridgeTcpServerService = null;
+        _videoTcpFrameReceiverService?.Dispose();
+        _videoTcpFrameReceiverService = null;
+        _videoH264DecodeService?.Dispose();
+        _videoH264DecodeService = null;
+        _videoConnectionId = 0;
+        _videoSyncReady = false;
         base.OnExit(e);
     }
 
