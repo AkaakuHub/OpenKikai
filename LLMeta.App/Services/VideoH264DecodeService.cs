@@ -27,6 +27,8 @@ public sealed class VideoH264DecodeService : IDisposable
     private DecodedVideoFrame? _latestFrame;
     private readonly object _frameLock = new();
     private bool _loggedFirstDecodedFrame;
+    private bool _decoderInitializationFailed;
+    private string? _decoderInitializationFailureReason;
 
     public VideoH264DecodeService(AppLogger logger)
     {
@@ -53,6 +55,11 @@ public sealed class VideoH264DecodeService : IDisposable
     {
         try
         {
+            if (_decoderInitializationFailed)
+            {
+                return _decoderInitializationFailureReason ?? "decoder initialization failed";
+            }
+
             EnsureStarted();
             if (_decoder is null)
             {
@@ -95,6 +102,8 @@ public sealed class VideoH264DecodeService : IDisposable
         }
         catch (Exception ex)
         {
+            _decoderInitializationFailed = true;
+            _decoderInitializationFailureReason = "decode failed: " + ex.Message;
             _logger.Error("Video decode failed.", ex);
             return "decode failed: " + ex.Message;
         }
@@ -106,7 +115,7 @@ public sealed class VideoH264DecodeService : IDisposable
         _decoder = null;
         if (_isStarted)
         {
-            MediaFactory.MFShutdown();
+            NativeMediaFoundation.MFShutdownChecked();
             _isStarted = false;
         }
     }
@@ -120,31 +129,19 @@ public sealed class VideoH264DecodeService : IDisposable
 
         if (!_isStarted)
         {
-            MediaFactory.MFStartup(true);
+            NativeMediaFoundation.MFStartupFull();
             _isStarted = true;
+            _logger.Info("Media Foundation started: full startup.");
         }
 
-        var inputType = new RegisterTypeInfo
+        var decoderTransform = CreateDecoderTransform();
+        if (decoderTransform is null)
         {
-            GuidMajorType = MediaTypeGuids.Video,
-            GuidSubtype = VideoFormatGuids.H264,
-        };
-
-        var outputType = new RegisterTypeInfo { GuidMajorType = MediaTypeGuids.Video };
-
-        using var activates = MediaFactory.MFTEnumEx(
-            TransformCategoryGuids.VideoDecoder,
-            (uint)(EnumFlag.EnumFlagHardware | EnumFlag.EnumFlagSortandfilter),
-            inputType,
-            outputType
-        );
-        var activate = activates.FirstOrDefault();
-        if (activate is null)
-        {
-            throw new InvalidOperationException("No H.264 hardware decoder MFT was found.");
+            throw new InvalidOperationException(
+                "No H.264 decoder MFT was found (hardware and software)."
+            );
         }
-
-        _decoder = activate.ActivateObject<IMFTransform>();
+        _decoder = decoderTransform;
 
         using var decoderInputType = MediaFactory.MFCreateMediaType();
         decoderInputType.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
@@ -153,7 +150,7 @@ public sealed class VideoH264DecodeService : IDisposable
 
         _decoder.ProcessMessage(TMessageType.MessageNotifyBeginStreaming, UIntPtr.Zero);
         _decoder.ProcessMessage(TMessageType.MessageNotifyStartOfStream, UIntPtr.Zero);
-        _logger.Info("Video decoder started: hardware H.264 MFT initialized.");
+        _logger.Info("Video decoder started: H.264 MFT initialized.");
     }
 
     private bool DrainOutputs(VideoFramePacket packet, out bool producedFrame)
@@ -296,6 +293,149 @@ public sealed class VideoH264DecodeService : IDisposable
                         + $"width={_outputWidth} height={_outputHeight} subtype={subtype}"
                 );
                 return _outputTypeSet;
+            }
+        }
+    }
+
+    private IMFTransform? CreateDecoderTransform()
+    {
+        var h264InputType = new RegisterTypeInfo
+        {
+            GuidMajorType = MediaTypeGuids.Video,
+            GuidSubtype = VideoFormatGuids.H264,
+        };
+        var h264EsInputType = new RegisterTypeInfo
+        {
+            GuidMajorType = MediaTypeGuids.Video,
+            GuidSubtype = VideoFormatGuids.H264Es,
+        };
+        RegisterTypeInfo?[] inputCandidates = [h264InputType, h264EsInputType];
+        RegisterTypeInfo?[] outputCandidates =
+        [
+            new RegisterTypeInfo { GuidMajorType = MediaTypeGuids.Video },
+            null,
+        ];
+
+        var hardwarePreferredFlags = (uint)(
+            EnumFlag.EnumFlagHardware | EnumFlag.EnumFlagSortandfilter
+        );
+        foreach (var inputCandidate in inputCandidates)
+        {
+            foreach (var outputCandidate in outputCandidates)
+            {
+                var decoder = EnumerateAndActivateDecoder(
+                    hardwarePreferredFlags,
+                    inputCandidate,
+                    outputCandidate
+                );
+                if (decoder is not null)
+                {
+                    _logger.Info(
+                        "Video decoder selected: hardware-preferred MFT."
+                            + $" inputSubtype={DescribeInputSubtype(inputCandidate)}"
+                            + $" outputFilter={DescribeOutputFilter(outputCandidate)}"
+                    );
+                    return decoder;
+                }
+            }
+        }
+
+        var broadFlags = (uint)EnumFlag.EnumFlagAll;
+        foreach (var inputCandidate in inputCandidates)
+        {
+            foreach (var outputCandidate in outputCandidates)
+            {
+                var decoder = EnumerateAndActivateDecoder(
+                    broadFlags,
+                    inputCandidate,
+                    outputCandidate
+                );
+                if (decoder is not null)
+                {
+                    _logger.Info(
+                        "Video decoder selected: broad-enumeration MFT."
+                            + $" inputSubtype={DescribeInputSubtype(inputCandidate)}"
+                            + $" outputFilter={DescribeOutputFilter(outputCandidate)}"
+                    );
+                    return decoder;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static IMFTransform? EnumerateAndActivateDecoder(
+        uint flags,
+        RegisterTypeInfo? inputType,
+        RegisterTypeInfo? outputType
+    )
+    {
+        using var activates = MediaFactory.MFTEnumEx(
+            TransformCategoryGuids.VideoDecoder,
+            flags,
+            inputType,
+            outputType
+        );
+        var activate = activates.FirstOrDefault();
+        if (activate is null)
+        {
+            return null;
+        }
+
+        return activate.ActivateObject<IMFTransform>();
+    }
+
+    private static string DescribeInputSubtype(RegisterTypeInfo? inputType)
+    {
+        if (inputType is null)
+        {
+            return "null";
+        }
+
+        if (inputType.Value.GuidSubtype == VideoFormatGuids.H264Es)
+        {
+            return "H264Es";
+        }
+
+        if (inputType.Value.GuidSubtype == VideoFormatGuids.H264)
+        {
+            return "H264";
+        }
+
+        return inputType.Value.GuidSubtype.ToString();
+    }
+
+    private static string DescribeOutputFilter(RegisterTypeInfo? outputType)
+    {
+        return outputType is null ? "null" : "video-major";
+    }
+
+    private static class NativeMediaFoundation
+    {
+        private const int MfVersion = 0x00020070;
+
+        [DllImport("mfplat.dll", ExactSpelling = true)]
+        private static extern int MFStartup(int version, int flags);
+
+        [DllImport("mfplat.dll", ExactSpelling = true)]
+        private static extern int MFShutdown();
+
+        public static void MFStartupFull()
+        {
+            var hr = MFStartup(MfVersion, 0);
+            if (hr < 0)
+            {
+                Marshal.ThrowExceptionForHR(hr);
+            }
+        }
+
+        public static void MFShutdownChecked()
+        {
+            var hr = MFShutdown();
+            if (hr < 0)
+            {
+                Marshal.ThrowExceptionForHR(hr);
             }
         }
     }

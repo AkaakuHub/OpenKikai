@@ -11,9 +11,7 @@ public sealed class AppLogger
 
     public void Error(string message, Exception? exception = null)
     {
-        var extra = exception is null
-            ? string.Empty
-            : $" | {exception.GetType().Name}: {exception.Message}";
+        var extra = exception is null ? string.Empty : $" | {exception}";
         Write("ERROR", message + extra);
     }
 
