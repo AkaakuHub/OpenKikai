@@ -110,16 +110,38 @@ public sealed partial class WebRtcPeerConnectionService
         _peerConnection.ondatachannel += dataChannel =>
         {
             _logger.Info($"WebRTC data channel opened: {dataChannel.label}");
+            if (!string.Equals(dataChannel.label, InputDataChannelLabel, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            SetInputDataChannel(dataChannel);
             dataChannel.onmessage += (_, _, payload) =>
             {
-                if (payload is null || payload.Length == 0)
+                if (payload is not null && payload.Length > 0)
                 {
-                    return;
+                    _logger.Info(
+                        $"WebRTC data message: channel={dataChannel.label} size={payload.Length}"
+                    );
                 }
-
-                _logger.Info(
-                    $"WebRTC data message: channel={dataChannel.label} size={payload.Length}"
-                );
+            };
+            dataChannel.onopen += () =>
+            {
+                lock (_stateLock)
+                {
+                    _inputChannelStatusText = $"Input channel: open ({dataChannel.label})";
+                }
+            };
+            dataChannel.onclose += () =>
+            {
+                lock (_stateLock)
+                {
+                    if (ReferenceEquals(_inputDataChannel, dataChannel))
+                    {
+                        _inputDataChannel = null;
+                        _inputChannelStatusText = "Input channel: closed, waiting reconnect";
+                    }
+                }
             };
         };
 
@@ -183,5 +205,6 @@ public sealed partial class WebRtcPeerConnectionService
         _peerConnection.Dispose();
         _peerConnection = null;
         _localVideoReceiveTrack = null;
+        SetInputDataChannel(null);
     }
 }

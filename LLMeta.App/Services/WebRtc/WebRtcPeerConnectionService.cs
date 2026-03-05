@@ -10,6 +10,8 @@ namespace LLMeta.App.Services;
 public sealed partial class WebRtcPeerConnectionService : IDisposable
 {
     private const int MaxVideoQueueLength = 4;
+    private const string InputDataChannelLabel = "input-state";
+    private static readonly TimeSpan InputTickInterval = TimeSpan.FromSeconds(1.0 / 90.0);
     private static readonly Regex CandidateIpRegex = new(
         @"^(candidate:\S+\s+\d+\s+(?:udp|tcp)\s+\d+\s+)(\S+)(\s+\d+\s+typ\s+\S+.*)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant
@@ -35,10 +37,19 @@ public sealed partial class WebRtcPeerConnectionService : IDisposable
     private double _receiveFps;
     private double _receiveBitrateKbps;
     private uint _pliRequests;
+    private RTCDataChannel? _inputDataChannel;
+    private OpenXrControllerState _latestInputState;
+    private bool _isKeyboardDebugMode;
+    private string _inputChannelStatusText = "Input channel: waiting data channel";
+    private CancellationTokenSource? _inputSendCts;
+    private Task? _inputSendTask;
 
     public WebRtcPeerConnectionService(AppLogger logger)
     {
         _logger = logger;
+        _latestInputState = default;
+        _inputSendCts = new CancellationTokenSource();
+        _inputSendTask = Task.Run(() => InputSendLoopAsync(_inputSendCts.Token));
     }
 
     public event Action<WebRtcSignalingMessage>? OutboundSignalingMessage;
@@ -162,6 +173,28 @@ public sealed partial class WebRtcPeerConnectionService : IDisposable
 
     public void Dispose()
     {
+        var inputSendCts = _inputSendCts;
+        if (inputSendCts is not null)
+        {
+            _inputSendCts = null;
+            try
+            {
+                inputSendCts.Cancel();
+            }
+            catch { }
+        }
+
+        try
+        {
+            _inputSendTask?.Wait(TimeSpan.FromSeconds(2));
+        }
+        catch { }
+        finally
+        {
+            _inputSendTask = null;
+            inputSendCts?.Dispose();
+        }
+
         lock (_stateLock)
         {
             _videoFrameQueue.Clear();
@@ -175,6 +208,8 @@ public sealed partial class WebRtcPeerConnectionService : IDisposable
             _receiveFps = 0;
             _receiveBitrateKbps = 0;
             _pliRequests = 0;
+            _inputDataChannel = null;
+            _inputChannelStatusText = "Input channel: stopped";
         }
         ClosePeerConnection();
     }

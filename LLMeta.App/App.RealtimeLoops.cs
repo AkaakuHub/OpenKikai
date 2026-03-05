@@ -86,7 +86,7 @@ public partial class App
                     _latestInputSource = inputSource;
                 }
 
-                _androidInputBridgeTcpServerService?.UpdateLatestState(state, keyboardDebugMode);
+                _webRtcPeerConnectionService?.UpdateLatestInputState(state, keyboardDebugMode);
             }
             catch (OperationCanceledException)
             {

@@ -11,7 +11,6 @@ namespace LLMeta.App;
 
 public partial class App : System.Windows.Application
 {
-    private const int AndroidBridgePort = 39090;
     private const int WebRtcSignalingPort = 39200;
     private const string EmulatorRouteHint = " (A-1: Android -> 10.0.2.2)";
     private const string OpenXrUnavailableReason =
@@ -20,7 +19,6 @@ public partial class App : System.Windows.Application
     private const string ConnectedVideoStatusPrefix = "Video: WebRTC connected | decode: ";
 
     private OpenXrControllerInputService? _openXrControllerInputService;
-    private AndroidInputBridgeTcpServerService? _androidInputBridgeTcpServerService;
     private VideoH264DecodeService? _videoH264DecodeService;
     private WebRtcSignalingTcpServerService? _webRtcSignalingTcpServerService;
     private WebRtcPeerConnectionService? _webRtcPeerConnectionService;
@@ -165,19 +163,13 @@ public partial class App : System.Windows.Application
                     : "Video render settings apply failed.";
             };
 
-            _androidInputBridgeTcpServerService = new AndroidInputBridgeTcpServerService(
-                logger,
-                AndroidBridgePort
-            );
-            _androidInputBridgeTcpServerService.Start();
-            mainViewModel.BridgeStatus =
-                _androidInputBridgeTcpServerService.StatusText + EmulatorRouteHint;
-
             _webRtcSignalingTcpServerService = new WebRtcSignalingTcpServerService(
                 logger,
                 WebRtcSignalingPort
             );
             _webRtcPeerConnectionService = new WebRtcPeerConnectionService(logger);
+            mainViewModel.BridgeStatus =
+                _webRtcPeerConnectionService.GetInputChannelStatusText() + EmulatorRouteHint;
             _webRtcPeerConnectionService.OutboundSignalingMessage += outboundMessage =>
             {
                 if (_webRtcSignalingTcpServerService is null)
@@ -270,10 +262,11 @@ public partial class App : System.Windows.Application
                             renderStats.LastUploadFailureCode
                         );
                     }
-                    if (_androidInputBridgeTcpServerService is not null)
+                    if (_webRtcPeerConnectionService is not null)
                     {
                         mainViewModel.BridgeStatus =
-                            _androidInputBridgeTcpServerService.StatusText + EmulatorRouteHint;
+                            _webRtcPeerConnectionService.GetInputChannelStatusText()
+                            + EmulatorRouteHint;
                     }
 
                     if (_lastOpenXrStatus != stateSnapshot.Status)
@@ -307,8 +300,6 @@ public partial class App : System.Windows.Application
         _uiTimer = null;
         _openXrControllerInputService?.Dispose();
         _openXrControllerInputService = null;
-        _androidInputBridgeTcpServerService?.Dispose();
-        _androidInputBridgeTcpServerService = null;
         _webRtcSignalingTcpServerService?.Dispose();
         _webRtcSignalingTcpServerService = null;
         _webRtcPeerConnectionService?.Dispose();
