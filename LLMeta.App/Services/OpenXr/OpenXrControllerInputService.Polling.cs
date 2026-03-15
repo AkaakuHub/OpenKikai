@@ -67,8 +67,6 @@ public sealed unsafe partial class OpenXrControllerInputService
         var hmdVerticalFovDegrees = GetCurrentVerticalFovDegrees();
         var leftEyeFov = GetCurrentEyeFovRadians(0, hmdVerticalFovDegrees);
         var rightEyeFov = GetCurrentEyeFovRadians(1, hmdVerticalFovDegrees);
-        LogInputTelemetry(ipdMeters, hmdVerticalFovDegrees, leftEyeFov, rightEyeFov);
-
         return new OpenXrControllerState(
             true,
             $"Session state: {_sessionState}",
@@ -179,33 +177,5 @@ public sealed unsafe partial class OpenXrControllerInputService
         }
 
         return fov;
-    }
-
-    private void LogInputTelemetry(
-        float ipdMeters,
-        float hmdVerticalFovDegrees,
-        Fovf leftFov,
-        Fovf rightFov
-    )
-    {
-        if (_logger is null)
-        {
-            return;
-        }
-
-        var nowUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        if (nowUnixMs - _lastInputTelemetryLogUnixMs < 1000)
-        {
-            return;
-        }
-
-        _lastInputTelemetryLogUnixMs = nowUnixMs;
-        _logger.Info(
-            "OpenXR telemetry: "
-                + $"ipdMeters={ipdMeters:F4} "
-                + $"vFovDeg={hmdVerticalFovDegrees:F2} "
-                + $"leftFov=(L:{leftFov.AngleLeft:F4},R:{leftFov.AngleRight:F4},U:{leftFov.AngleUp:F4},D:{leftFov.AngleDown:F4}) "
-                + $"rightFov=(L:{rightFov.AngleLeft:F4},R:{rightFov.AngleRight:F4},U:{rightFov.AngleUp:F4},D:{rightFov.AngleDown:F4})"
-        );
     }
 }

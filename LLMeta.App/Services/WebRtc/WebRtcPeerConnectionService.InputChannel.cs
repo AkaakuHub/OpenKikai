@@ -6,8 +6,7 @@ namespace LLMeta.App.Services;
 
 public sealed partial class WebRtcPeerConnectionService
 {
-    private const float DegToRad = 0.0174532925f;
-    private const int InputPayloadSize = 104;
+    private const int InputPayloadSize = 108;
 
     public void UpdateLatestInputState(OpenXrControllerState state, bool isKeyboardDebugMode)
     {
@@ -87,31 +86,32 @@ public sealed partial class WebRtcPeerConnectionService
         BinaryPrimitives.WriteSingleLittleEndian(span.Slice(20, 4), frame.LeftGripValue);
         BinaryPrimitives.WriteSingleLittleEndian(span.Slice(24, 4), frame.RightTriggerValue);
         BinaryPrimitives.WriteSingleLittleEndian(span.Slice(28, 4), frame.RightGripValue);
-        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(32, 4), frame.YawRadians);
-        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(36, 4), frame.PitchRadians);
-        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(40, 4), frame.RollRadians);
-        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(44, 4), frame.HmdPositionX);
-        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(48, 4), frame.HmdPositionY);
-        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(52, 4), frame.HmdPositionZ);
+        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(32, 4), frame.OrientationX);
+        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(36, 4), frame.OrientationY);
+        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(40, 4), frame.OrientationZ);
+        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(44, 4), frame.OrientationW);
+        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(48, 4), frame.HmdPositionX);
+        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(52, 4), frame.HmdPositionY);
+        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(56, 4), frame.HmdPositionZ);
         BinaryPrimitives.WriteInt32LittleEndian(
-            span.Slice(56, 4),
+            span.Slice(60, 4),
             unchecked((int)frame.ButtonsBitMask)
         );
-        BinaryPrimitives.WriteInt32LittleEndian(span.Slice(60, 4), frame.Flags);
-        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(64, 4), frame.IpdMeters);
-        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(68, 4), frame.HmdVerticalFovDegrees);
-        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(72, 4), frame.LeftEyeAngleLeftRadians);
-        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(76, 4), frame.LeftEyeAngleRightRadians);
-        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(80, 4), frame.LeftEyeAngleUpRadians);
-        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(84, 4), frame.LeftEyeAngleDownRadians);
-        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(88, 4), frame.RightEyeAngleLeftRadians);
+        BinaryPrimitives.WriteInt32LittleEndian(span.Slice(64, 4), frame.Flags);
+        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(68, 4), frame.IpdMeters);
+        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(72, 4), frame.HmdVerticalFovDegrees);
+        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(76, 4), frame.LeftEyeAngleLeftRadians);
+        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(80, 4), frame.LeftEyeAngleRightRadians);
+        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(84, 4), frame.LeftEyeAngleUpRadians);
+        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(88, 4), frame.LeftEyeAngleDownRadians);
+        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(92, 4), frame.RightEyeAngleLeftRadians);
         BinaryPrimitives.WriteSingleLittleEndian(
-            span.Slice(92, 4),
+            span.Slice(96, 4),
             frame.RightEyeAngleRightRadians
         );
-        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(96, 4), frame.RightEyeAngleUpRadians);
+        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(100, 4), frame.RightEyeAngleUpRadians);
         BinaryPrimitives.WriteSingleLittleEndian(
-            span.Slice(100, 4),
+            span.Slice(104, 4),
             frame.RightEyeAngleDownRadians
         );
     }
@@ -125,9 +125,10 @@ public sealed partial class WebRtcPeerConnectionService
         float LeftGripValue,
         float RightTriggerValue,
         float RightGripValue,
-        float YawRadians,
-        float PitchRadians,
-        float RollRadians,
+        float OrientationX,
+        float OrientationY,
+        float OrientationZ,
+        float OrientationW,
         float HmdPositionX,
         float HmdPositionY,
         float HmdPositionZ,
@@ -191,6 +192,7 @@ public sealed partial class WebRtcPeerConnectionService
                 flags |= 1;
             }
 
+            // Send raw OpenXR pose values here. The receiver owns camera-mode conversion and session baselines.
             return new InputFrame(
                 state.LeftStickX,
                 state.LeftStickY,
@@ -200,9 +202,10 @@ public sealed partial class WebRtcPeerConnectionService
                 state.LeftGripValue,
                 state.RightTriggerValue,
                 state.RightGripValue,
-                state.HeadPose.YawDegrees * DegToRad,
-                state.HeadPose.PitchDegrees * DegToRad,
-                state.HeadPose.RollDegrees * DegToRad,
+                state.HeadPose.OrientationX,
+                state.HeadPose.OrientationY,
+                state.HeadPose.OrientationZ,
+                state.HeadPose.OrientationW,
                 state.HeadPose.PositionX,
                 state.HeadPose.PositionY,
                 state.HeadPose.PositionZ,

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Windows.Input;
 using LLMeta.App.Models;
@@ -27,6 +28,11 @@ public sealed class KeyboardInputEmulatorService
     public OpenXrControllerState BuildState()
     {
         ApplyHeadPoseStep();
+        var orientation = CreateQuaternionFromEulerDegrees(
+            _emulatedYawDegrees,
+            _emulatedPitchDegrees,
+            _emulatedRollDegrees
+        );
 
         return new OpenXrControllerState(
             true,
@@ -39,6 +45,10 @@ public sealed class KeyboardInputEmulatorService
                 _emulatedPositionX,
                 _emulatedPositionY,
                 _emulatedPositionZ,
+                orientation.X,
+                orientation.Y,
+                orientation.Z,
+                orientation.W,
                 _emulatedYawDegrees,
                 _emulatedPitchDegrees,
                 _emulatedRollDegrees,
@@ -91,6 +101,10 @@ public sealed class KeyboardInputEmulatorService
                 0,
                 0,
                 0,
+                0,
+                0,
+                0,
+                1,
                 0,
                 0,
                 0,
@@ -220,5 +234,31 @@ public sealed class KeyboardInputEmulatorService
         {
             _emulatedPositionZ -= positionStep;
         }
+    }
+
+    private static (float X, float Y, float Z, float W) CreateQuaternionFromEulerDegrees(
+        float yawDegrees,
+        float pitchDegrees,
+        float rollDegrees
+    )
+    {
+        const float degToRad = 0.0174532925f;
+        var yaw = yawDegrees * degToRad;
+        var pitch = pitchDegrees * degToRad;
+        var roll = rollDegrees * degToRad;
+
+        var cy = MathF.Cos(yaw * 0.5f);
+        var sy = MathF.Sin(yaw * 0.5f);
+        var cp = MathF.Cos(pitch * 0.5f);
+        var sp = MathF.Sin(pitch * 0.5f);
+        var cr = MathF.Cos(roll * 0.5f);
+        var sr = MathF.Sin(roll * 0.5f);
+
+        return (
+            sr * cp * cy - cr * sp * sy,
+            cr * sp * cy + sr * cp * sy,
+            cr * cp * sy - sr * sp * cy,
+            cr * cp * cy + sr * sp * sy
+        );
     }
 }
