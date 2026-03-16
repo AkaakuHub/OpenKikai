@@ -28,12 +28,6 @@ public partial class App
         if (initializeState.IsInitialized)
         {
             _openXrControllerInputService = openXrControllerInputService;
-            if (_videoH264DecodeService is not null)
-            {
-                _videoH264DecodeService.SetD3D11DevicePointer(
-                    openXrControllerInputService.GetD3D11DevicePointer()
-                );
-            }
         }
         else
         {

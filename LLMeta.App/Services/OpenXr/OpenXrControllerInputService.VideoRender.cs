@@ -20,8 +20,6 @@ public sealed unsafe partial class OpenXrControllerInputService
     private const long DxgiFormatR8G8B8A8Unorm = 28;
     private const long DxgiFormatNv12 = 103;
     private const int DxgiErrorNotFound = unchecked((int)0x887A0002);
-    private const uint LowLatencyEyeWidth = 960;
-    private const uint LowLatencyEyeHeight = 1080;
 
     private readonly object _videoFrameLock = new();
     private readonly Swapchain[] _colorSwapchains = new Swapchain[StereoViewCount];
@@ -250,11 +248,8 @@ public sealed unsafe partial class OpenXrControllerInputService
         for (var eye = 0; eye < StereoViewCount; eye++)
         {
             var viewConfig = _viewConfigurationViews[eye];
-            var swapchainWidth = Math.Min(viewConfig.RecommendedImageRectWidth, LowLatencyEyeWidth);
-            var swapchainHeight = Math.Min(
-                viewConfig.RecommendedImageRectHeight,
-                LowLatencyEyeHeight
-            );
+            var swapchainWidth = viewConfig.RecommendedImageRectWidth;
+            var swapchainHeight = viewConfig.RecommendedImageRectHeight;
             var swapchainCreateInfo = new SwapchainCreateInfo
             {
                 Type = StructureType.SwapchainCreateInfo,

@@ -85,6 +85,20 @@
             Command="{Binding ApplyVideoRenderSettingsCommand}"
           />
         </StackPanel>
+        <TextBlock Text="Capture target" Foreground="Gray" Margin="0,0,0,4" />
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+          <Button
+            Content="Select Window / Monitor"
+            Width="180"
+            Command="{Binding SelectCaptureTargetCommand}"
+            Margin="0,0,8,0"
+          />
+          <TextBlock
+            VerticalAlignment="Center"
+            Text="{Binding CaptureStatus}"
+            TextWrapping="Wrap"
+          />
+        </StackPanel>
         <TextBlock
           Foreground="Gray"
           TextWrapping="Wrap"

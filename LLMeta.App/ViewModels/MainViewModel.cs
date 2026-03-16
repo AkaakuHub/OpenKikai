@@ -33,6 +33,7 @@ public sealed class MainViewModel : ViewModelBase
     private string _videoRenderConfigStatus = "Video render config: not initialized";
     private string _videoRenderErrorStatus = "Video render error: none";
     private string _webRtcSignalingPort = string.Empty;
+    private string _captureStatus = "Capture: not selected";
 
     public MainViewModel(AppSettings settings, SettingsStore settingsStore, AppLogger logger)
     {
@@ -43,6 +44,7 @@ public sealed class MainViewModel : ViewModelBase
         ApplySignalingPortCommand = new RelayCommand(_ => ApplySignalingPort());
         ReinitializeOpenXrCommand = new RelayCommand(_ => RequestReinitializeOpenXr());
         ApplyVideoRenderSettingsCommand = new RelayCommand(_ => RequestApplyVideoRenderSettings());
+        SelectCaptureTargetCommand = new RelayCommand(_ => RequestSelectCaptureTarget());
     }
 
     public string StatusMessage
@@ -90,10 +92,12 @@ public sealed class MainViewModel : ViewModelBase
     public ICommand ApplySignalingPortCommand { get; }
     public ICommand ReinitializeOpenXrCommand { get; }
     public ICommand ApplyVideoRenderSettingsCommand { get; }
+    public ICommand SelectCaptureTargetCommand { get; }
 
     public event Action? OpenXrReinitializeRequested;
     public event Action<int>? SignalingPortApplyRequested;
     public event Action<string, string, string>? VideoRenderSettingsApplyRequested;
+    public event Action? CaptureTargetSelectionRequested;
 
     public string BridgeStatus
     {
@@ -168,6 +172,12 @@ public sealed class MainViewModel : ViewModelBase
     {
         get => _webRtcSignalingPort;
         set => SetProperty(ref _webRtcSignalingPort, value);
+    }
+
+    public string CaptureStatus
+    {
+        get => _captureStatus;
+        set => SetProperty(ref _captureStatus, value);
     }
 
     public void UpdateVideoRenderConfig(OpenXrVideoRenderConfigState config, int lastFailureCode)
@@ -279,6 +289,11 @@ public sealed class MainViewModel : ViewModelBase
         );
     }
 
+    private void RequestSelectCaptureTarget()
+    {
+        CaptureTargetSelectionRequested?.Invoke();
+    }
+
     private static string NormalizeSwapchainFormatOption(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -337,12 +352,12 @@ public sealed class MainViewModel : ViewModelBase
         if (
             code == 2
             && (
-                videoStatus.Contains("waiting WebRTC frame", StringComparison.OrdinalIgnoreCase)
-                || videoStatus.Contains("sync=waiting-keyframe", StringComparison.OrdinalIgnoreCase)
+                videoStatus.Contains("waiting capture frame", StringComparison.OrdinalIgnoreCase)
+                || videoStatus.Contains("Capture: not selected", StringComparison.OrdinalIgnoreCase)
             )
         )
         {
-            return "Video render status: waiting first decoded frame";
+            return "Video render status: waiting first captured frame";
         }
 
         return $"Video render error: code={code} ({DescribeRenderFailureCode(code)})";

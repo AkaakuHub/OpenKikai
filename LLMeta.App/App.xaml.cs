@@ -15,13 +15,12 @@ public partial class App : System.Windows.Application
     private const string EmulatorRouteHint = " (A-1: Android -> 10.0.2.2)";
     private const string OpenXrUnavailableReason =
         "OpenXR is not initialized. Click Reinitialize OpenXR or enable keyboard debug input.";
-    private const string WaitingVideoStatus = "Video: waiting WebRTC frame" + EmulatorRouteHint;
-    private const string ConnectedVideoStatusPrefix = "Video: WebRTC connected | decode: ";
+    private const string WaitingVideoStatus = "Video: waiting capture frame";
 
     private OpenXrControllerInputService? _openXrControllerInputService;
-    private VideoH264DecodeService? _videoH264DecodeService;
     private WebRtcSignalingTcpServerService? _webRtcSignalingTcpServerService;
     private WebRtcPeerConnectionService? _webRtcPeerConnectionService;
+    private WindowCaptureService? _windowCaptureService;
     private readonly KeyboardInputEmulatorService _keyboardInputEmulatorService = new();
     private readonly object _runtimeStateLock = new();
     private DispatcherTimer? _uiTimer;
@@ -33,24 +32,7 @@ public partial class App : System.Windows.Application
     private string _latestVideoStatus = WaitingVideoStatus;
     private string? _lastOpenXrStatus;
     private volatile bool _isKeyboardDebugMode;
-    private uint _videoConnectionId;
     private DateTimeOffset _lastVideoPipelineLogAt = DateTimeOffset.MinValue;
-    private DateTimeOffset _lastVideoKeyFrameRequestAt = DateTimeOffset.MinValue;
-    private uint _videoFramesObserved;
-    private uint _videoDecodeCalls;
-    private uint _videoDecodedFrames;
-    private string _lastVideoDecodeStatus = "none";
-    private long _lastDecodeElapsedMs;
-    private uint _videoConsecutiveNoFrameDecodes;
-    private DateTimeOffset _lastVideoDecodedAt = DateTimeOffset.MinValue;
-    private bool _isWaitingForVideoKeyFrame = true;
-    private DateTimeOffset _videoLoopCheckpointAt = DateTimeOffset.MinValue;
-    private string _videoLoopCheckpointLabel = "init";
-    private DateTimeOffset _lastVideoLoopStallLogAt = DateTimeOffset.MinValue;
-    private uint _lastRenderProgressSequence;
-    private uint _lastRenderProgressDecodedFrames;
-    private DateTimeOffset _lastRenderProgressAt = DateTimeOffset.MinValue;
-    private DateTimeOffset _lastRenderStallLogAt = DateTimeOffset.MinValue;
 
     public App()
     {
@@ -130,6 +112,9 @@ public partial class App : System.Windows.Application
                         ? "Input source: OpenXR"
                         : "Input source: unavailable";
                 }
+                _windowCaptureService?.SetD3D11DevicePointer(
+                    _openXrControllerInputService?.GetD3D11DevicePointer() ?? IntPtr.Zero
+                );
                 StartRealtimeLoops(logger);
                 if (reinitializeState.IsInitialized)
                 {
@@ -173,14 +158,45 @@ public partial class App : System.Windows.Application
                         ? "Input source: OpenXR"
                         : "Input source: unavailable";
                 }
+                _windowCaptureService?.SetD3D11DevicePointer(
+                    _openXrControllerInputService?.GetD3D11DevicePointer() ?? IntPtr.Zero
+                );
                 StartRealtimeLoops(logger);
                 mainViewModel.StatusMessage = reinitializeState.IsInitialized
                     ? $"Video render settings applied: {settings.PreferredSwapchainFormat}, {settings.PreferredGraphicsBackend}"
                     : "Video render settings apply failed.";
             };
+            mainViewModel.CaptureTargetSelectionRequested += async () =>
+            {
+                if (MainWindow is null || _windowCaptureService is null)
+                {
+                    mainViewModel.StatusMessage = "Capture target selection is unavailable.";
+                    return;
+                }
+
+                try
+                {
+                    var selected = await _windowCaptureService.PickAndStartCaptureAsync(MainWindow);
+                    mainViewModel.CaptureStatus = _windowCaptureService.GetStatusText();
+                    mainViewModel.StatusMessage = selected
+                        ? "Capture target selected."
+                        : "Capture target selection canceled.";
+                }
+                catch (Exception ex)
+                {
+                    logger.Error("Capture target selection failed.", ex);
+                    mainViewModel.CaptureStatus = _windowCaptureService.GetStatusText();
+                    mainViewModel.StatusMessage = "Capture target selection failed.";
+                }
+            };
 
             InitializeWebRtcSignalingServer(logger, signalingPort, mainViewModel);
             _webRtcPeerConnectionService = new WebRtcPeerConnectionService(logger);
+            _windowCaptureService = new WindowCaptureService(logger);
+            _windowCaptureService.FrameCaptured += frame =>
+            {
+                _openXrControllerInputService?.SetLatestDecodedSbsFrame(frame);
+            };
             mainViewModel.BridgeStatus =
                 _webRtcPeerConnectionService.GetInputChannelStatusText() + EmulatorRouteHint;
             _webRtcPeerConnectionService.OutboundSignalingMessage += outboundMessage =>
@@ -197,7 +213,6 @@ public partial class App : System.Windows.Application
                     logger.Info($"WebRTC signaling tx dropped: type={outboundMessage.Type}");
                 }
             };
-            _videoH264DecodeService = new VideoH264DecodeService(logger);
             ResetVideoPipelineMetrics();
             mainViewModel.VideoStatus = WaitingVideoStatus;
 
@@ -215,6 +230,9 @@ public partial class App : System.Windows.Application
                     ? "Input source: OpenXR"
                     : "Input source: unavailable";
             }
+            _windowCaptureService.SetD3D11DevicePointer(
+                _openXrControllerInputService?.GetD3D11DevicePointer() ?? IntPtr.Zero
+            );
 
             MainWindow = new MainWindow { DataContext = mainViewModel };
             MainWindow.PreviewKeyDown += (_, args) =>
@@ -269,6 +287,10 @@ public partial class App : System.Windows.Application
                         mainViewModel.BridgeStatus =
                             _webRtcPeerConnectionService.GetInputChannelStatusText()
                             + EmulatorRouteHint;
+                    }
+                    if (_windowCaptureService is not null)
+                    {
+                        mainViewModel.CaptureStatus = _windowCaptureService.GetStatusText();
                     }
 
                     if (_lastOpenXrStatus != stateSnapshot.Status)
@@ -347,9 +369,8 @@ public partial class App : System.Windows.Application
         _webRtcSignalingTcpServerService = null;
         _webRtcPeerConnectionService?.Dispose();
         _webRtcPeerConnectionService = null;
-        _videoH264DecodeService?.Dispose();
-        _videoH264DecodeService = null;
-        _videoConnectionId = 0;
+        _windowCaptureService?.Dispose();
+        _windowCaptureService = null;
         base.OnExit(e);
     }
 }

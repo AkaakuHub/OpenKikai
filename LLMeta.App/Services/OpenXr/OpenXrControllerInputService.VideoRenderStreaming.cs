@@ -3,6 +3,7 @@ using LLMeta.App.Models;
 using Silk.NET.Core.Native;
 using Silk.NET.Direct3D11;
 using Silk.NET.DXGI;
+using Silk.NET.Maths;
 using Silk.NET.OpenXR;
 
 namespace LLMeta.App.Services;
@@ -267,6 +268,57 @@ public sealed unsafe partial class OpenXrControllerInputService
         Texture2DDesc targetTextureDesc = default;
         sourceTexture->GetDesc(&sourceTextureDesc);
         texture->GetDesc(&targetTextureDesc);
+        var halfWidth = sourceWidth / 2;
+        if (halfWidth <= 0)
+        {
+            uploadFailureCode = 4;
+            return false;
+        }
+
+        var requiresScaledBlit =
+            sourceTextureDesc.Format == Format.FormatNV12
+            && (
+                sourceTextureDesc.Format != targetTextureDesc.Format
+                || halfWidth != (int)targetTextureDesc.Width
+                || sourceVisibleHeight != (int)targetTextureDesc.Height
+            );
+        if (requiresScaledBlit)
+        {
+            if (
+                !TryBlitEyeTextureWithVideoProcessor(
+                    sourceTexture,
+                    sourceSubresourceIndex,
+                    sourceTextureDesc,
+                    texture,
+                    targetTextureDesc,
+                    eye,
+                    halfWidth,
+                    sourceVisibleHeight,
+                    out uploadFailureCode
+                )
+            )
+            {
+                return false;
+            }
+
+            var nowUnixMsScaled = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            ageFromReceiveMs =
+                sourceTimestampUnixMs == 0 ? 0 : nowUnixMsScaled - (long)sourceTimestampUnixMs;
+            ageFromDecodeMs =
+                sourceDecodedUnixMs == 0 ? 0 : nowUnixMsScaled - (long)sourceDecodedUnixMs;
+            if (ageFromReceiveMs < 0)
+            {
+                ageFromReceiveMs = 0;
+            }
+
+            if (ageFromDecodeMs < 0)
+            {
+                ageFromDecodeMs = 0;
+            }
+
+            return true;
+        }
+
         var copySourceTexture = sourceTexture;
         var copySourceSubresourceIndex = sourceSubresourceIndex;
         if (sourceTextureDesc.Format != targetTextureDesc.Format)
@@ -288,13 +340,6 @@ public sealed unsafe partial class OpenXrControllerInputService
             }
 
             copySourceSubresourceIndex = 0;
-        }
-
-        var halfWidth = sourceWidth / 2;
-        if (halfWidth <= 0)
-        {
-            uploadFailureCode = 4;
-            return false;
         }
 
         var copyWidth = Math.Min(halfWidth, (int)targetTextureDesc.Width);
@@ -334,21 +379,6 @@ public sealed unsafe partial class OpenXrControllerInputService
             &sourceBox
         );
         var nowUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        const long sbsTelemetryIntervalMs = 1000;
-        if (nowUnixMs - _lastSbsSplitTelemetryLogUnixMs >= sbsTelemetryIntervalMs)
-        {
-            _lastSbsSplitTelemetryLogUnixMs = nowUnixMs;
-            var eyeLabel = eye == 0 ? "left" : "right";
-            _logger?.Info(
-                "SBS split telemetry: "
-                    + $"eye={eyeLabel} "
-                    + $"sourceSize={sourceWidth}x{sourceVisibleHeight} "
-                    + $"halfWidth={halfWidth} "
-                    + $"copyRect=({sourceLeft},0)-({sourceRight},{sourceBottom}) "
-                    + $"targetSize={targetTextureDesc.Width}x{targetTextureDesc.Height} "
-                    + "expectedOrder=leftThenRight"
-            );
-        }
         ageFromReceiveMs = sourceTimestampUnixMs == 0 ? 0 : nowUnixMs - (long)sourceTimestampUnixMs;
         ageFromDecodeMs = sourceDecodedUnixMs == 0 ? 0 : nowUnixMs - (long)sourceDecodedUnixMs;
         if (ageFromReceiveMs < 0)
@@ -361,6 +391,122 @@ public sealed unsafe partial class OpenXrControllerInputService
             ageFromDecodeMs = 0;
         }
 
+        return true;
+    }
+
+    private bool TryBlitEyeTextureWithVideoProcessor(
+        ID3D11Texture2D* sourceTexture,
+        uint sourceSubresourceIndex,
+        Texture2DDesc sourceTextureDesc,
+        ID3D11Texture2D* targetTexture,
+        Texture2DDesc targetTextureDesc,
+        int eye,
+        int halfWidth,
+        int sourceVisibleHeight,
+        out int failureCode
+    )
+    {
+        failureCode = 49;
+        if (
+            !EnsureVideoProcessorForTargetBlit(
+                sourceTexture,
+                sourceSubresourceIndex,
+                sourceTextureDesc,
+                targetTextureDesc.Width,
+                targetTextureDesc.Height,
+                targetTextureDesc.Format,
+                out failureCode
+            )
+        )
+        {
+            return false;
+        }
+
+        if (
+            _videoProcessor is null
+            || _videoProcessorOutputView is null
+            || _videoProcessorOutputTexture is null
+            || _videoProcessorInputView is null
+            || _d3d11VideoContext is null
+        )
+        {
+            failureCode = 50;
+            return false;
+        }
+
+        var sourceLeft = eye == 0 ? 0 : halfWidth;
+        var sourceRect = new Box2D<int>(sourceLeft, 0, sourceLeft + halfWidth, sourceVisibleHeight);
+        var destinationRect = new Box2D<int>(
+            0,
+            0,
+            (int)targetTextureDesc.Width,
+            (int)targetTextureDesc.Height
+        );
+
+        _d3d11VideoContext->VideoProcessorSetStreamFrameFormat(
+            _videoProcessor,
+            0,
+            VideoFrameFormat.Progressive
+        );
+        _d3d11VideoContext->VideoProcessorSetStreamAutoProcessingMode(_videoProcessor, 0, 0);
+        _d3d11VideoContext->VideoProcessorSetStreamSourceRect(
+            _videoProcessor,
+            0,
+            1,
+            ref sourceRect
+        );
+        _d3d11VideoContext->VideoProcessorSetStreamDestRect(
+            _videoProcessor,
+            0,
+            1,
+            ref destinationRect
+        );
+        _d3d11VideoContext->VideoProcessorSetOutputTargetRect(
+            _videoProcessor,
+            1,
+            ref destinationRect
+        );
+
+        var stream = new VideoProcessorStream
+        {
+            Enable = 1,
+            OutputIndex = 0,
+            InputFrameOrField = 0,
+            PastFrames = 0,
+            FutureFrames = 0,
+            PpPastSurfaces = null,
+            PInputSurface = _videoProcessorInputView,
+            PpFutureSurfaces = null,
+            PpPastSurfacesRight = null,
+            PInputSurfaceRight = null,
+            PpFutureSurfacesRight = null,
+        };
+
+        var blitHr = _d3d11VideoContext->VideoProcessorBlt(
+            _videoProcessor,
+            _videoProcessorOutputView,
+            0,
+            1,
+            &stream
+        );
+        if (blitHr < 0)
+        {
+            failureCode = 52;
+            return false;
+        }
+
+        _d3d11DeviceContext->CopySubresourceRegion(
+            (ID3D11Resource*)targetTexture,
+            0,
+            0,
+            0,
+            0,
+            (ID3D11Resource*)_videoProcessorOutputTexture,
+            0,
+            (Box*)0
+        );
+
+        failureCode = 0;
         return true;
     }
 
@@ -466,12 +612,6 @@ public sealed unsafe partial class OpenXrControllerInputService
     {
         convertedTexture = null;
         failureCode = 31;
-        if (sourceTextureDesc.Format != Format.FormatNV12)
-        {
-            failureCode = 32;
-            return false;
-        }
-
         if (
             !EnsureVideoProcessorForFormatConversion(
                 sourceTexture,
@@ -830,6 +970,309 @@ public sealed unsafe partial class OpenXrControllerInputService
             )
             {
                 failureCode = 47;
+                return false;
+            }
+
+            _videoProcessorInputTexturePointer = (nint)sourceTexture;
+            _videoProcessorInputSubresourceIndex = sourceSubresourceIndex;
+        }
+
+        return true;
+    }
+
+    private bool EnsureVideoProcessorForTargetBlit(
+        ID3D11Texture2D* sourceTexture,
+        uint sourceSubresourceIndex,
+        Texture2DDesc sourceTextureDesc,
+        uint targetWidth,
+        uint targetHeight,
+        Format targetFormat,
+        out int failureCode
+    )
+    {
+        failureCode = 0;
+        if (_d3d11Device is null || _d3d11DeviceContext is null)
+        {
+            failureCode = 53;
+            return false;
+        }
+
+        if (_d3d11VideoDevice is null)
+        {
+            void* videoDevicePointer = null;
+            var videoDeviceGuid = Id3D11VideoDeviceGuid;
+            if (
+                _d3d11Device->QueryInterface(ref videoDeviceGuid, ref videoDevicePointer) < 0
+                || videoDevicePointer is null
+            )
+            {
+                failureCode = 54;
+                return false;
+            }
+
+            _d3d11VideoDevice = (ID3D11VideoDevice*)videoDevicePointer;
+        }
+
+        if (_d3d11VideoContext is null)
+        {
+            void* videoContextPointer = null;
+            var videoContextGuid = Id3D11VideoContextGuid;
+            if (
+                _d3d11DeviceContext->QueryInterface(ref videoContextGuid, ref videoContextPointer)
+                    < 0
+                || videoContextPointer is null
+            )
+            {
+                failureCode = 55;
+                return false;
+            }
+
+            _d3d11VideoContext = (ID3D11VideoContext*)videoContextPointer;
+        }
+
+        var needsRecreateProcessor =
+            _videoProcessorEnumerator is null
+            || _videoProcessor is null
+            || _videoProcessorOutputTexture is null
+            || _videoProcessorOutputView is null
+            || _videoProcessorInputWidth != sourceTextureDesc.Width
+            || _videoProcessorInputHeight != sourceTextureDesc.Height
+            || _videoProcessorOutputWidth != targetWidth
+            || _videoProcessorOutputHeight != targetHeight
+            || _videoProcessorOutputFormat != targetFormat;
+        if (needsRecreateProcessor)
+        {
+            var videoProcessorTargetFormat = NormalizeVideoProcessorTargetFormat(targetFormat);
+            var usageCandidates = new[]
+            {
+                _videoProcessorUsage,
+                VideoUsage.OptimalSpeed,
+                (VideoUsage)0,
+                (VideoUsage)2,
+            };
+            var recreateSucceeded = false;
+            var recreateFailureCode = 56;
+            foreach (var usage in usageCandidates.Distinct())
+            {
+                ReleaseVideoProcessorWorkingSet();
+
+                var contentDesc = new VideoProcessorContentDesc
+                {
+                    InputFrameFormat = VideoFrameFormat.Progressive,
+                    InputFrameRate = new Rational { Numerator = 60, Denominator = 1 },
+                    InputWidth = sourceTextureDesc.Width,
+                    InputHeight = sourceTextureDesc.Height,
+                    OutputFrameRate = new Rational { Numerator = 60, Denominator = 1 },
+                    OutputWidth = targetWidth,
+                    OutputHeight = targetHeight,
+                    Usage = usage,
+                };
+
+                var createEnumeratorHr = _d3d11VideoDevice->CreateVideoProcessorEnumerator(
+                    ref contentDesc,
+                    ref _videoProcessorEnumerator
+                );
+                if (createEnumeratorHr < 0)
+                {
+                    recreateFailureCode = 57;
+                    LogVideoProcessorFailureDetail(
+                        $"code=57 hr=0x{createEnumeratorHr:X8} usage={(int)usage} in={sourceTextureDesc.Width}x{sourceTextureDesc.Height} out={targetWidth}x{targetHeight}"
+                    );
+                    continue;
+                }
+
+                uint sourceSupport = 0;
+                var sourceFormatCheckHr = _videoProcessorEnumerator->CheckVideoProcessorFormat(
+                    sourceTextureDesc.Format,
+                    ref sourceSupport
+                );
+                if (sourceFormatCheckHr < 0)
+                {
+                    recreateFailureCode = 58;
+                    LogVideoProcessorFailureDetail(
+                        $"code=58 hr=0x{sourceFormatCheckHr:X8} usage={(int)usage} srcFmt={(int)sourceTextureDesc.Format}"
+                    );
+                    continue;
+                }
+
+                var inputSupported =
+                    ((VideoProcessorFormatSupport)sourceSupport & VideoProcessorFormatSupport.Input)
+                    != 0;
+                if (!inputSupported)
+                {
+                    recreateFailureCode = 59;
+                    LogVideoProcessorFailureDetail(
+                        $"code=59 usage={(int)usage} srcFmt={(int)sourceTextureDesc.Format} support=0x{sourceSupport:X8}"
+                    );
+                    continue;
+                }
+
+                uint outputSupport = 0;
+                var outputFormatCheckHr = _videoProcessorEnumerator->CheckVideoProcessorFormat(
+                    videoProcessorTargetFormat,
+                    ref outputSupport
+                );
+                if (outputFormatCheckHr < 0)
+                {
+                    recreateFailureCode = 60;
+                    LogVideoProcessorFailureDetail(
+                        $"code=60 hr=0x{outputFormatCheckHr:X8} usage={(int)usage} outFmt={(int)videoProcessorTargetFormat} targetFmtRaw={(int)targetFormat}"
+                    );
+                    continue;
+                }
+
+                var outputSupported =
+                    (
+                        (VideoProcessorFormatSupport)outputSupport
+                        & VideoProcessorFormatSupport.Output
+                    ) != 0;
+                if (!outputSupported)
+                {
+                    recreateFailureCode = 61;
+                    LogVideoProcessorFailureDetail(
+                        $"code=61 usage={(int)usage} srcFmt={(int)sourceTextureDesc.Format} outFmt={(int)videoProcessorTargetFormat} targetFmtRaw={(int)targetFormat} support=0x{outputSupport:X8} in={sourceTextureDesc.Width}x{sourceTextureDesc.Height} out={targetWidth}x{targetHeight}"
+                    );
+                    continue;
+                }
+
+                var createProcessorHr = _d3d11VideoDevice->CreateVideoProcessor(
+                    _videoProcessorEnumerator,
+                    0,
+                    ref _videoProcessor
+                );
+                if (createProcessorHr < 0)
+                {
+                    recreateFailureCode = 62;
+                    LogVideoProcessorFailureDetail(
+                        $"code=62 hr=0x{createProcessorHr:X8} usage={(int)usage}"
+                    );
+                    continue;
+                }
+
+                var outputDesc = new Texture2DDesc
+                {
+                    Width = targetWidth,
+                    Height = targetHeight,
+                    MipLevels = 1,
+                    ArraySize = 1,
+                    Format = videoProcessorTargetFormat,
+                    SampleDesc = new SampleDesc { Count = 1, Quality = 0 },
+                    Usage = Usage.Default,
+                    BindFlags = 0,
+                    CPUAccessFlags = 0,
+                    MiscFlags = 0,
+                };
+                var bindFlagCandidates = new[]
+                {
+                    (uint)(BindFlag.RenderTarget | BindFlag.ShaderResource | BindFlag.VideoEncoder),
+                    (uint)(BindFlag.RenderTarget | BindFlag.VideoEncoder),
+                    (uint)BindFlag.RenderTarget,
+                };
+                var outputViewCreated = false;
+                foreach (var bindFlags in bindFlagCandidates.Distinct())
+                {
+                    outputDesc.BindFlags = bindFlags;
+                    if (
+                        _d3d11Device->CreateTexture2D(
+                            ref outputDesc,
+                            (SubresourceData*)0,
+                            ref _videoProcessorOutputTexture
+                        ) < 0
+                    )
+                    {
+                        recreateFailureCode = 64;
+                        LogVideoProcessorFailureDetail(
+                            $"code=64 usage={(int)usage} bind=0x{bindFlags:X8} texFmt={(int)videoProcessorTargetFormat} size={targetWidth}x{targetHeight}"
+                        );
+                        continue;
+                    }
+
+                    var outputViewDesc = new VideoProcessorOutputViewDesc
+                    {
+                        ViewDimension = VpovDimension.Texture2D,
+                        Anonymous = new VideoProcessorOutputViewDescUnion
+                        {
+                            Texture2D = new Tex2DVpov { MipSlice = 0 },
+                        },
+                    };
+                    var outputViewResult = _d3d11VideoDevice->CreateVideoProcessorOutputView(
+                        (ID3D11Resource*)_videoProcessorOutputTexture,
+                        _videoProcessorEnumerator,
+                        ref outputViewDesc,
+                        ref _videoProcessorOutputView
+                    );
+                    if (outputViewResult >= 0)
+                    {
+                        outputViewCreated = true;
+                        break;
+                    }
+
+                    recreateFailureCode = 65;
+                    LogVideoProcessorFailureDetail(
+                        $"code=65 hr=0x{outputViewResult:X8} usage={(int)usage} bind=0x{bindFlags:X8} texFmt={(int)videoProcessorTargetFormat}"
+                    );
+                    _ = _videoProcessorOutputTexture->Release();
+                    _videoProcessorOutputTexture = null;
+                }
+
+                if (!outputViewCreated)
+                {
+                    continue;
+                }
+
+                _videoProcessorUsage = usage;
+                _videoProcessorInputWidth = sourceTextureDesc.Width;
+                _videoProcessorInputHeight = sourceTextureDesc.Height;
+                _videoProcessorOutputWidth = targetWidth;
+                _videoProcessorOutputHeight = targetHeight;
+                _videoProcessorOutputFormat = targetFormat;
+                _videoProcessorInputTexturePointer = IntPtr.Zero;
+                _videoProcessorInputSubresourceIndex = uint.MaxValue;
+                recreateSucceeded = true;
+                lock (_videoFrameLock)
+                {
+                    _lastVideoProcessorFailureDetail = string.Empty;
+                }
+                break;
+            }
+
+            if (!recreateSucceeded)
+            {
+                failureCode = recreateFailureCode;
+                return false;
+            }
+        }
+
+        if (
+            _videoProcessorInputView is null
+            || _videoProcessorInputTexturePointer != (nint)sourceTexture
+            || _videoProcessorInputSubresourceIndex != sourceSubresourceIndex
+        )
+        {
+            ReleaseVideoProcessorInputView();
+
+            var mipLevels = sourceTextureDesc.MipLevels == 0 ? 1u : sourceTextureDesc.MipLevels;
+            var mipSlice = sourceSubresourceIndex % mipLevels;
+            var arraySlice = sourceSubresourceIndex / mipLevels;
+            var inputViewDesc = new VideoProcessorInputViewDesc
+            {
+                FourCC = 0,
+                ViewDimension = VpivDimension.Texture2D,
+                Anonymous = new VideoProcessorInputViewDescUnion
+                {
+                    Texture2D = new Tex2DVpiv { MipSlice = mipSlice, ArraySlice = arraySlice },
+                },
+            };
+            if (
+                _d3d11VideoDevice->CreateVideoProcessorInputView(
+                    (ID3D11Resource*)sourceTexture,
+                    _videoProcessorEnumerator,
+                    ref inputViewDesc,
+                    ref _videoProcessorInputView
+                ) < 0
+            )
+            {
+                failureCode = 63;
                 return false;
             }
 
