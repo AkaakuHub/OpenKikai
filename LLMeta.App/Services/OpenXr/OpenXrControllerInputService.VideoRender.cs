@@ -32,6 +32,10 @@ public sealed unsafe partial class OpenXrControllerInputService
     private readonly View[] _views = new View[StereoViewCount];
     private readonly uint[] _swapchainRenderWidths = new uint[StereoViewCount];
     private readonly uint[] _swapchainRenderHeights = new uint[StereoViewCount];
+    private Swapchain _placeholderQuadSwapchain;
+    private SwapchainImageD3D11KHR[] _placeholderQuadSwapchainImages = [];
+    private uint _placeholderQuadSwapchainWidth;
+    private uint _placeholderQuadSwapchainHeight;
     private long _colorSwapchainFormat;
     private string _swapchainFormatSummary = string.Empty;
     private ulong _requiredGraphicsAdapterLuid;
@@ -59,6 +63,10 @@ public sealed unsafe partial class OpenXrControllerInputService
     private uint _blackClearTextureWidth;
     private uint _blackClearTextureHeight;
     private Format _blackClearTextureFormat;
+    private ID3D11Texture2D* _placeholderTexture;
+    private uint _placeholderTextureWidth;
+    private uint _placeholderTextureHeight;
+    private Format _placeholderTextureFormat;
     private nint _videoProcessorInputTexturePointer;
     private uint _videoProcessorInputSubresourceIndex;
     private uint _videoProcessorInputWidth;
@@ -311,6 +319,67 @@ public sealed unsafe partial class OpenXrControllerInputService
             _swapchainImages[eye] = images;
         }
 
+        const uint placeholderWidth = 1600;
+        const uint placeholderHeight = 900;
+        var placeholderSwapchainCreateInfo = new SwapchainCreateInfo
+        {
+            Type = StructureType.SwapchainCreateInfo,
+            CreateFlags = 0,
+            UsageFlags = SwapchainUsageFlags.ColorAttachmentBit | SwapchainUsageFlags.SampledBit,
+            Format = _colorSwapchainFormat,
+            SampleCount = 1,
+            Width = placeholderWidth,
+            Height = placeholderHeight,
+            FaceCount = 1,
+            ArraySize = 1,
+            MipCount = 1,
+        };
+        var createPlaceholderSwapchainResult = _xr.CreateSwapchain(
+            _session,
+            ref placeholderSwapchainCreateInfo,
+            ref _placeholderQuadSwapchain
+        );
+        if (createPlaceholderSwapchainResult != Result.Success)
+        {
+            return createPlaceholderSwapchainResult;
+        }
+
+        uint placeholderImageCount = 0;
+        var enumeratePlaceholderImagesResult = _xr.EnumerateSwapchainImages(
+            _placeholderQuadSwapchain,
+            0,
+            ref placeholderImageCount,
+            (SwapchainImageBaseHeader*)0
+        );
+        if (enumeratePlaceholderImagesResult != Result.Success)
+        {
+            return enumeratePlaceholderImagesResult;
+        }
+
+        var placeholderImages = new SwapchainImageD3D11KHR[placeholderImageCount];
+        for (var i = 0; i < placeholderImages.Length; i++)
+        {
+            placeholderImages[i].Type = StructureType.SwapchainImageD3D11Khr;
+        }
+
+        fixed (SwapchainImageD3D11KHR* placeholderImagesPointer = placeholderImages)
+        {
+            enumeratePlaceholderImagesResult = _xr.EnumerateSwapchainImages(
+                _placeholderQuadSwapchain,
+                placeholderImageCount,
+                ref placeholderImageCount,
+                (SwapchainImageBaseHeader*)placeholderImagesPointer
+            );
+            if (enumeratePlaceholderImagesResult != Result.Success)
+            {
+                return enumeratePlaceholderImagesResult;
+            }
+        }
+
+        _placeholderQuadSwapchainImages = placeholderImages;
+        _placeholderQuadSwapchainWidth = placeholderWidth;
+        _placeholderQuadSwapchainHeight = placeholderHeight;
+
         return Result.Success;
     }
 
@@ -331,6 +400,16 @@ public sealed unsafe partial class OpenXrControllerInputService
 
             _swapchainImages[eye] = [];
         }
+
+        if (_placeholderQuadSwapchain.Handle != 0)
+        {
+            _xr.DestroySwapchain(_placeholderQuadSwapchain);
+            _placeholderQuadSwapchain = default;
+        }
+
+        _placeholderQuadSwapchainImages = [];
+        _placeholderQuadSwapchainWidth = 0;
+        _placeholderQuadSwapchainHeight = 0;
 
         ReleaseVideoProcessorResources();
     }

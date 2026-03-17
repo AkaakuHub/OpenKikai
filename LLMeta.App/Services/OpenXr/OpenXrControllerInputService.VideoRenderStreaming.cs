@@ -1,3 +1,5 @@
+using System.Drawing;
+using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using LLMeta.App.Models;
 using Silk.NET.Core.Native;
@@ -147,8 +149,20 @@ public sealed unsafe partial class OpenXrControllerInputService
                 ViewCount = StereoViewCount,
                 Views = projectionViewsPointer,
             };
-            var layerHeader = (CompositionLayerBaseHeader*)(&projectionLayer);
-            CompositionLayerBaseHeader*[] layerHeaders = [layerHeader];
+            var projectionLayerHeader = (CompositionLayerBaseHeader*)(&projectionLayer);
+            CompositionLayerQuad placeholderQuadLayer = default;
+            CompositionLayerBaseHeader*[] layerHeaders;
+            if (hasRenderedVideoFrame || !TryBuildPlaceholderQuadLayer(out placeholderQuadLayer))
+            {
+                layerHeaders = [projectionLayerHeader];
+            }
+            else
+            {
+                var placeholderQuadLayerHeader = (CompositionLayerBaseHeader*)(
+                    &placeholderQuadLayer
+                );
+                layerHeaders = [projectionLayerHeader, placeholderQuadLayerHeader];
+            }
             fixed (CompositionLayerBaseHeader** layerHeadersPointer = layerHeaders)
             {
                 var endInfo = new FrameEndInfo
@@ -156,7 +170,7 @@ public sealed unsafe partial class OpenXrControllerInputService
                     Type = StructureType.FrameEndInfo,
                     DisplayTime = predictedDisplayTime,
                     EnvironmentBlendMode = EnvironmentBlendMode.Opaque,
-                    LayerCount = 1,
+                    LayerCount = (uint)layerHeaders.Length,
                     Layers = layerHeadersPointer,
                 };
                 var endResult = _xr.EndFrame(_session, ref endInfo);
@@ -259,6 +273,7 @@ public sealed unsafe partial class OpenXrControllerInputService
 
         if (sourceTexturePointer == IntPtr.Zero || sourceWidth <= 1 || sourceVisibleHeight <= 0)
         {
+            ClearEyeTextureToBlack(texture);
             uploadFailureCode = 2;
             return false;
         }
@@ -548,11 +563,13 @@ public sealed unsafe partial class OpenXrControllerInputService
             return false;
         }
 
+        var clearFormat = NormalizeVideoProcessorTargetFormat(format);
+
         var requiresRecreate =
             _blackClearTexture is null
             || _blackClearTextureWidth != width
             || _blackClearTextureHeight != height
-            || _blackClearTextureFormat != format;
+            || _blackClearTextureFormat != clearFormat;
         if (!requiresRecreate)
         {
             return true;
@@ -567,37 +584,295 @@ public sealed unsafe partial class OpenXrControllerInputService
             _blackClearTextureFormat = 0;
         }
 
-        var textureDesc = new Texture2DDesc
+        using var bitmap = new Bitmap((int)width, (int)height, PixelFormat.Format32bppArgb);
+        using (var graphics = Graphics.FromImage(bitmap))
         {
-            Width = width,
-            Height = height,
-            MipLevels = 1,
-            ArraySize = 1,
-            Format = format,
-            SampleDesc = new SampleDesc { Count = 1, Quality = 0 },
-            Usage = Usage.Default,
-            BindFlags = (uint)BindFlag.None,
-            CPUAccessFlags = 0,
-            MiscFlags = 0,
-        };
+            graphics.Clear(Color.DimGray);
+        }
 
-        var createResult = _d3d11Device->CreateTexture2D(
-            ref textureDesc,
-            (SubresourceData*)0,
-            ref _blackClearTexture
+        var bounds = new System.Drawing.Rectangle(0, 0, bitmap.Width, bitmap.Height);
+        var bitmapData = bitmap.LockBits(
+            bounds,
+            ImageLockMode.ReadOnly,
+            PixelFormat.Format32bppArgb
         );
-        if (createResult < 0 || _blackClearTexture is null)
+        try
         {
-            _logger?.Info(
-                $"Black clear texture creation failed: hr=0x{createResult:X8} size={width}x{height} fmt={(int)format}"
+            var textureDesc = new Texture2DDesc
+            {
+                Width = width,
+                Height = height,
+                MipLevels = 1,
+                ArraySize = 1,
+                Format = clearFormat,
+                SampleDesc = new SampleDesc { Count = 1, Quality = 0 },
+                Usage = Usage.Default,
+                BindFlags = (uint)BindFlag.None,
+                CPUAccessFlags = 0,
+                MiscFlags = 0,
+            };
+
+            var subresourceData = new SubresourceData
+            {
+                PSysMem = bitmapData.Scan0.ToPointer(),
+                SysMemPitch = (uint)bitmapData.Stride,
+                SysMemSlicePitch = 0,
+            };
+
+            var createResult = _d3d11Device->CreateTexture2D(
+                ref textureDesc,
+                ref subresourceData,
+                ref _blackClearTexture
             );
-            return false;
+            if (createResult < 0 || _blackClearTexture is null)
+            {
+                _logger?.Info(
+                    $"White clear texture creation failed: hr=0x{createResult:X8} size={width}x{height} fmt={(int)format} normalizedFmt={(int)clearFormat}"
+                );
+                return false;
+            }
+        }
+        finally
+        {
+            bitmap.UnlockBits(bitmapData);
         }
 
         _blackClearTextureWidth = width;
         _blackClearTextureHeight = height;
-        _blackClearTextureFormat = format;
+        _blackClearTextureFormat = clearFormat;
         return true;
+    }
+
+    private bool ShowPlaceholderTexture(ID3D11Texture2D* texture)
+    {
+        if (_d3d11DeviceContext is null)
+        {
+            return false;
+        }
+
+        Texture2DDesc targetDesc = default;
+        texture->GetDesc(&targetDesc);
+        if (!EnsurePlaceholderTexture(targetDesc.Width, targetDesc.Height, targetDesc.Format))
+        {
+            return false;
+        }
+
+        if (_placeholderTexture is null)
+        {
+            return false;
+        }
+
+        _d3d11DeviceContext->CopySubresourceRegion(
+            (ID3D11Resource*)texture,
+            0,
+            0,
+            0,
+            0,
+            (ID3D11Resource*)_placeholderTexture,
+            0,
+            (Box*)0
+        );
+        return true;
+    }
+
+    private bool EnsurePlaceholderTexture(uint width, uint height, Format format)
+    {
+        if (_d3d11Device is null)
+        {
+            return false;
+        }
+
+        var placeholderFormat = NormalizeVideoProcessorTargetFormat(format);
+
+        var requiresRecreate =
+            _placeholderTexture is null
+            || _placeholderTextureWidth != width
+            || _placeholderTextureHeight != height
+            || _placeholderTextureFormat != placeholderFormat;
+        if (!requiresRecreate)
+        {
+            return true;
+        }
+
+        if (_placeholderTexture is not null)
+        {
+            _ = _placeholderTexture->Release();
+            _placeholderTexture = null;
+            _placeholderTextureWidth = 0;
+            _placeholderTextureHeight = 0;
+            _placeholderTextureFormat = 0;
+        }
+
+        using var bitmap = new Bitmap((int)width, (int)height, PixelFormat.Format32bppArgb);
+        using (var graphics = Graphics.FromImage(bitmap))
+        {
+            graphics.Clear(Color.DimGray);
+            graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+            using var font = new Font("Segoe UI", Math.Max(34.0f, width / 30.0f), FontStyle.Bold);
+            using var brush = new SolidBrush(Color.Black);
+            using var textFormat = new StringFormat
+            {
+                Alignment = StringAlignment.Center,
+                LineAlignment = StringAlignment.Center,
+            };
+            var horizontalMargin = width * 0.12f;
+            var verticalMargin = height * 0.24f;
+            var layout = new RectangleF(
+                horizontalMargin,
+                verticalMargin,
+                width - (horizontalMargin * 2.0f),
+                height - (verticalMargin * 2.6f)
+            );
+            graphics.DrawString(
+                "Please select window\nor monitor to capture",
+                font,
+                brush,
+                layout,
+                textFormat
+            );
+        }
+
+        var bounds = new System.Drawing.Rectangle(0, 0, bitmap.Width, bitmap.Height);
+        var bitmapData = bitmap.LockBits(
+            bounds,
+            ImageLockMode.ReadOnly,
+            PixelFormat.Format32bppArgb
+        );
+        try
+        {
+            var textureDesc = new Texture2DDesc
+            {
+                Width = width,
+                Height = height,
+                MipLevels = 1,
+                ArraySize = 1,
+                Format = placeholderFormat,
+                SampleDesc = new SampleDesc { Count = 1, Quality = 0 },
+                Usage = Usage.Default,
+                BindFlags = (uint)BindFlag.None,
+                CPUAccessFlags = 0,
+                MiscFlags = 0,
+            };
+            var subresourceData = new SubresourceData
+            {
+                PSysMem = bitmapData.Scan0.ToPointer(),
+                SysMemPitch = (uint)bitmapData.Stride,
+                SysMemSlicePitch = 0,
+            };
+            var createResult = _d3d11Device->CreateTexture2D(
+                ref textureDesc,
+                ref subresourceData,
+                ref _placeholderTexture
+            );
+            if (createResult < 0 || _placeholderTexture is null)
+            {
+                _logger?.Info(
+                    $"Placeholder texture creation failed: hr=0x{createResult:X8} size={width}x{height} fmt={(int)format} normalizedFmt={(int)placeholderFormat}"
+                );
+                return false;
+            }
+        }
+        finally
+        {
+            bitmap.UnlockBits(bitmapData);
+        }
+
+        _placeholderTextureWidth = width;
+        _placeholderTextureHeight = height;
+        _placeholderTextureFormat = placeholderFormat;
+        return true;
+    }
+
+    private bool TryBuildPlaceholderQuadLayer(out CompositionLayerQuad quadLayer)
+    {
+        quadLayer = default;
+        if (_xr is null || _localSpace.Handle == 0 || _placeholderQuadSwapchain.Handle == 0)
+        {
+            return false;
+        }
+
+        var acquireInfo = new SwapchainImageAcquireInfo
+        {
+            Type = StructureType.SwapchainImageAcquireInfo,
+        };
+        uint imageIndex = 0;
+        var acquireResult = _xr.AcquireSwapchainImage(
+            _placeholderQuadSwapchain,
+            ref acquireInfo,
+            ref imageIndex
+        );
+        if (acquireResult != Result.Success)
+        {
+            return false;
+        }
+
+        try
+        {
+            var waitInfo = new SwapchainImageWaitInfo
+            {
+                Type = StructureType.SwapchainImageWaitInfo,
+                Timeout = long.MaxValue,
+            };
+            var waitResult = _xr.WaitSwapchainImage(_placeholderQuadSwapchain, ref waitInfo);
+            if (waitResult != Result.Success)
+            {
+                return false;
+            }
+
+            var targetTexture = (ID3D11Texture2D*)
+                _placeholderQuadSwapchainImages[imageIndex].Texture;
+            if (!ShowPlaceholderTexture(targetTexture))
+            {
+                return false;
+            }
+
+            quadLayer = new CompositionLayerQuad
+            {
+                Type = StructureType.CompositionLayerQuad,
+                Space = _localSpace,
+                EyeVisibility = EyeVisibility.Both,
+                Pose = new Posef
+                {
+                    Orientation = new Quaternionf
+                    {
+                        X = 0,
+                        Y = 0,
+                        Z = 0,
+                        W = 1,
+                    },
+                    Position = new Vector3f
+                    {
+                        X = 0,
+                        Y = 0,
+                        Z = -1.0f,
+                    },
+                },
+                Size = new Extent2Df { Width = 1.2f, Height = 0.675f },
+                SubImage = new SwapchainSubImage
+                {
+                    Swapchain = _placeholderQuadSwapchain,
+                    ImageRect = new Rect2Di
+                    {
+                        Offset = new Offset2Di { X = 0, Y = 0 },
+                        Extent = new Extent2Di
+                        {
+                            Width = (int)_placeholderQuadSwapchainWidth,
+                            Height = (int)_placeholderQuadSwapchainHeight,
+                        },
+                    },
+                    ImageArrayIndex = 0,
+                },
+            };
+            return true;
+        }
+        finally
+        {
+            var releaseInfo = new SwapchainImageReleaseInfo
+            {
+                Type = StructureType.SwapchainImageReleaseInfo,
+            };
+            _ = _xr.ReleaseSwapchainImage(_placeholderQuadSwapchain, ref releaseInfo);
+        }
     }
 
     private bool TryConvertSourceTextureToSwapchainFormat(
@@ -1378,6 +1653,15 @@ public sealed unsafe partial class OpenXrControllerInputService
     private void ReleaseVideoProcessorResources()
     {
         ReleaseVideoProcessorWorkingSet();
+
+        if (_placeholderTexture is not null)
+        {
+            _ = _placeholderTexture->Release();
+            _placeholderTexture = null;
+        }
+        _placeholderTextureWidth = 0;
+        _placeholderTextureHeight = 0;
+        _placeholderTextureFormat = 0;
 
         if (_blackClearTexture is not null)
         {
