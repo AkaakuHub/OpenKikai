@@ -2,9 +2,9 @@
 
 [日本語READMEはこちら](./docs/ja/README.md)
 
-# LLMeta
+# OpenKikai
 
-The client for Linkura VR
+The client for OpenKikai System.
 
 # Disclaimer
 
@@ -21,7 +21,7 @@ flowchart LR
       LK["Linkura"]
     end
 
-    subgraph L["LLMeta"]
+    subgraph L["OpenKikai"]
       direction TB
       BI["Bypass Input"]
       SC["Screen Capture"]
@@ -55,3 +55,4 @@ This project is currently in the alpha stage, so contributions are welcome!
 # Special Thanks
 
 - [linkura-localify](https://github.com/ChocoLZS/linkura-localify)
+

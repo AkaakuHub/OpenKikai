@@ -1,8 +1,8 @@
 [![Platform](https://img.shields.io/badge/platform-Windows-blue)](https://github.com/AkaakuHub/refined-line)
 
-# LLMeta
+# OpenKikai
 
-リンクラVRのためのクライアント
+OpenKikai システムのためのクライアント。
 
 # 免責事項
 
@@ -19,7 +19,7 @@ flowchart LR
       LK["Linkura"]
     end
 
-    subgraph L["LLMeta"]
+    subgraph L["OpenKikai"]
       direction TB
       BI["Bypass Input"]
       SC["Screen Capture"]
@@ -50,3 +50,4 @@ flowchart LR
 
 # スペシャルサンクス
 - [linkura-localify](https://github.com/ChocoLZS/linkura-localify)
+
