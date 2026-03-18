@@ -16,7 +16,7 @@ flowchart LR
 
     subgraph E["Android Emulator"]
       direction TB
-      LK["Linkura"]
+      LK["Game"]
     end
 
     subgraph L["OpenKikai"]
