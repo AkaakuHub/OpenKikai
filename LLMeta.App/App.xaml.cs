@@ -1,6 +1,7 @@
 using System.Windows;
 using LLMeta.App.Models;
 using LLMeta.App.Services;
+using LLMeta.App.Services.WindowCapture;
 using LLMeta.App.Stores;
 using LLMeta.App.Utils;
 using LLMeta.App.ViewModels;
@@ -83,6 +84,7 @@ public partial class App : System.Windows.Application
 
             var settingsStore = new SettingsStore(logger);
             var settings = settingsStore.Load();
+            var captureTargetRestoreService = new CaptureTargetRestoreService(logger);
             var mainViewModel = new MainViewModel(settings, settingsStore, logger);
             mainViewModel.SelectedSwapchainFormatOption = settings.PreferredSwapchainFormat;
             mainViewModel.SelectedGraphicsAdapterOption = settings.PreferredGraphicsAdapter;
@@ -175,11 +177,25 @@ public partial class App : System.Windows.Application
 
                 try
                 {
-                    var selected = await _windowCaptureService.PickAndStartCaptureAsync(MainWindow);
+                    var item = await _windowCaptureService.PickCaptureItemAsync(MainWindow);
+                    if (item is null)
+                    {
+                        mainViewModel.CaptureStatus = _windowCaptureService.GetStatusText();
+                        mainViewModel.StatusMessage = "Capture target selection canceled.";
+                        return;
+                    }
+
+                    var started = _windowCaptureService.StartCapture(item);
                     mainViewModel.CaptureStatus = _windowCaptureService.GetStatusText();
-                    mainViewModel.StatusMessage = selected
-                        ? "Capture target selected."
-                        : "Capture target selection canceled.";
+                    if (!started)
+                    {
+                        mainViewModel.StatusMessage = "Capture target selection failed.";
+                        return;
+                    }
+
+                    var savedCaptureTarget = captureTargetRestoreService.TryCreateSavedTarget(item);
+                    SaveCaptureTargetSelection(settings, settingsStore, savedCaptureTarget);
+                    mainViewModel.StatusMessage = "Capture target selected.";
                 }
                 catch (Exception ex)
                 {
@@ -235,6 +251,7 @@ public partial class App : System.Windows.Application
                 }
             };
             MainWindow.Show();
+            RestoreCaptureTargetIfAvailable(settings, captureTargetRestoreService, mainViewModel);
 
             if (_uiTimer is null)
             {

@@ -74,7 +74,7 @@ public sealed class WindowCaptureService : IDisposable
         }
     }
 
-    public async Task<bool> PickAndStartCaptureAsync(Window ownerWindow)
+    public async Task<GraphicsCaptureItem?> PickCaptureItemAsync(Window ownerWindow)
     {
         var picker = new GraphicsCapturePicker();
         var ownerHwnd = new WindowInteropHelper(ownerWindow).Handle;
@@ -86,11 +86,15 @@ public sealed class WindowCaptureService : IDisposable
             {
                 _statusText = "Capture: selection canceled";
             }
-            return false;
+            return null;
         }
 
-        StartCapture(item);
-        return true;
+        return item;
+    }
+
+    public bool StartCapture(GraphicsCaptureItem item)
+    {
+        return StartCaptureCore(item);
     }
 
     public void StopCapture()
@@ -112,18 +116,19 @@ public sealed class WindowCaptureService : IDisposable
         }
     }
 
-    private void StartCapture(GraphicsCaptureItem item)
+    private bool StartCaptureCore(GraphicsCaptureItem item)
     {
         lock (_lock)
         {
             if (_captureDevice is null)
             {
                 _statusText = "Capture: D3D11 device unavailable";
-                return;
+                return false;
             }
 
             DisposeCaptureObjects();
             _captureItem = item;
+            _captureItem.Closed += OnCaptureItemClosed;
             _sequence = 0;
             _loggedFirstFrame = false;
             _framePool = Direct3D11CaptureFramePool.CreateFreeThreaded(
@@ -141,6 +146,17 @@ public sealed class WindowCaptureService : IDisposable
             _logger.Info(
                 $"Window capture started: target={item.DisplayName} size={item.Size.Width}x{item.Size.Height} minUpdateIntervalMs={_captureSession.MinUpdateInterval.TotalMilliseconds:0.###} dirtyRegionMode={_captureSession.DirtyRegionMode}"
             );
+            return true;
+        }
+    }
+
+    private void OnCaptureItemClosed(GraphicsCaptureItem sender, object args)
+    {
+        lock (_lock)
+        {
+            DisposeCaptureObjects();
+            _captureItem = null;
+            _statusText = "Capture: target closed";
         }
     }
 
@@ -246,6 +262,11 @@ public sealed class WindowCaptureService : IDisposable
 
     private void DisposeCaptureObjects()
     {
+        if (_captureItem is not null)
+        {
+            _captureItem.Closed -= OnCaptureItemClosed;
+        }
+
         if (_framePool is not null)
         {
             _framePool.FrameArrived -= OnFrameArrived;

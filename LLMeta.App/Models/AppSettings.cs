@@ -7,4 +7,5 @@ public class AppSettings
     public string PreferredGraphicsAdapter { get; set; } = "Auto";
     public string PreferredGraphicsBackend { get; set; } = "D3D11";
     public int WindowsInputTcpPort { get; set; } = 39200;
+    public SavedCaptureTarget? SavedCaptureTarget { get; set; }
 }
